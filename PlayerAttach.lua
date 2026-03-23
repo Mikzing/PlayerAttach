@@ -18,7 +18,7 @@
 --
 
 local SCRIPT_NAME = 'Player Attach'
-local SCRIPT_VERSION = '2.9.0'
+local SCRIPT_VERSION = '3.0.0'
 
 -----------------------------------------------------------------------
 -- Permission check
@@ -423,47 +423,49 @@ local function create_player_menu(pid, pname)
     end)
 
     --------------------------------------------------------------------
-    -- POSITION CONTROLS — +/- buttons for each axis
+    -- ADJUST POSITION — submenu with +/- buttons for each axis
     --------------------------------------------------------------------
+    local pos_menu = p_menu:submenu('Adjust Position')
+
     local step_sizes = { 0.05, 0.1, 0.25, 0.5, 1.0 }
     local step_names = { '0.05', '0.1', '0.25', '0.5', '1.0' }
     local rot_steps  = { 1.0, 5.0, 15.0, 30.0, 45.0 }
     local rot_names  = { '1', '5', '15', '30', '45' }
     local step_idx = 2
 
-    local step_btn = p_menu:button('Step: 0.1 | Rot: 5')
-    step_btn:tooltip('Click to cycle step size')
+    local step_btn = pos_menu:button('Cycle Step Size')
+    step_btn:tooltip('Click to cycle: 0.05 / 0.1 / 0.25 / 0.5 / 1.0')
     step_btn:event(menu.event.click, function()
-        step_idx = step_idx % #step_sizes + 1
-        safe_notify('Step: ' .. step_names[step_idx] .. ' | Rot: ' .. rot_names[step_idx])
+        step_idx = step_idx % 5 + 1
+        safe_notify('Step: ' .. step_names[step_idx] .. ' Rot: ' .. rot_names[step_idx])
     end)
 
     local function make_axis(key, label_minus, label_plus, is_rot)
-        local bm = p_menu:button(label_minus)
+        local bm = pos_menu:button(label_minus)
         bm:event(menu.event.click, function()
             local s = is_rot and rot_steps[step_idx] or step_sizes[step_idx]
             offset[key] = offset[key] - s
             reattach()
-            safe_notify(key .. ': ' .. string.format('%.2f', offset[key]))
+            safe_notify(key .. ' = ' .. string.format('%.2f', offset[key]))
         end)
-        local bp = p_menu:button(label_plus)
+        local bp = pos_menu:button(label_plus)
         bp:event(menu.event.click, function()
             local s = is_rot and rot_steps[step_idx] or step_sizes[step_idx]
             offset[key] = offset[key] + s
             reattach()
-            safe_notify(key .. ': ' .. string.format('%.2f', offset[key]))
+            safe_notify(key .. ' = ' .. string.format('%.2f', offset[key]))
         end)
     end
 
-    make_axis('x',     '< Left',       'Right >',      false)
-    make_axis('y',     '< Back',       'Front >',      false)
-    make_axis('z',     '< Down',       'Up >',         false)
-    make_axis('pitch', '< Pitch Down', 'Pitch Up >',   true)
-    make_axis('roll',  '< Roll Left',  'Roll Right >', true)
-    make_axis('yaw',   '< Yaw Left',   'Yaw Right >',  true)
+    make_axis('x',     'Left',       'Right',      false)
+    make_axis('y',     'Back',       'Front',      false)
+    make_axis('z',     'Down',       'Up',         false)
+    make_axis('pitch', 'Pitch Down', 'Pitch Up',   true)
+    make_axis('roll',  'Roll Left',  'Roll Right', true)
+    make_axis('yaw',   'Yaw Left',   'Yaw Right',  true)
 
-    local reset_btn = p_menu:button('Reset Position')
-    reset_btn:tooltip('Reset all position and rotation to 0')
+    local reset_btn = pos_menu:button('Reset Position')
+    reset_btn:tooltip('Reset all offsets to 0')
     reset_btn:event(menu.event.click, function()
         offset.x = 0.0; offset.y = 0.0; offset.z = 0.0
         offset.pitch = 0.0; offset.roll = 0.0; offset.yaw = 0.0
