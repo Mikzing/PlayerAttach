@@ -18,7 +18,7 @@
 --
 
 local SCRIPT_NAME = 'Player Attach'
-local SCRIPT_VERSION = '2.7.0'
+local SCRIPT_VERSION = '2.8.0'
 
 -----------------------------------------------------------------------
 -- Permission check
@@ -423,61 +423,223 @@ local function create_player_menu(pid, pname)
     end)
 
     --------------------------------------------------------------------
-    -- STEP SIZE
+    -- POSITION / ROTATION SLIDERS
+    -- Try multiple Lexis API styles. First success wins.
+    -- Fallback: +/- buttons (always work).
     --------------------------------------------------------------------
-    local step_sizes = { 0.05, 0.1, 0.25, 0.5, 1.0 }
-    local step_names = { '0.05', '0.1', '0.25', '0.5', '1.0' }
-    local rot_steps  = { 1.0, 5.0, 15.0, 30.0, 45.0 }
-    local rot_names  = { '1', '5', '15', '30', '45' }
-    local step_idx = 2  -- default 0.1
+    local slider_method = 'none'
+    local sliders = {}
 
-    local step_btn = p_menu:button('Step: 0.1 | Rot: 5')
-    step_btn:tooltip('Click to cycle: 0.05 / 0.1 / 0.25 / 0.5 / 1.0')
-    step_btn:event(menu.event.click, function()
-        step_idx = step_idx % #step_sizes + 1
-        safe_notify('Position step: ' .. step_names[step_idx] .. ' | Rotation step: ' .. rot_names[step_idx])
-    end)
+    -- Helper: try creating a slider, return handle or nil
+    local function try_slider(name, key, mn, mx, def, step, is_rot)
+        local s
 
-    --------------------------------------------------------------------
-    -- POSITION ADJUSTMENT — +/- buttons for each axis
-    -- Each click adjusts offset, shows value, and live-updates
-    --------------------------------------------------------------------
-    local function make_axis(key, label_minus, label_plus, is_rot)
-        local bm = p_menu:button(label_minus)
-        bm:event(menu.event.click, function()
-            local s = is_rot and rot_steps[step_idx] or step_sizes[step_idx]
-            offset[key] = offset[key] - s
-            reattach()
-            safe_notify(key .. ': ' .. string.format('%.2f', offset[key]))
-        end)
+        -- Approach 1: number_float with fmt chaining (original v1.2.0 style)
+        if slider_method == 'none' or slider_method == 'number_float' then
+            local ok, result = pcall(function()
+                local sl = p_menu:number_float(name, menu.type.scroll)
+                if is_rot then
+                    sl:fmt('%.1f', mn, mx, step)
+                else
+                    sl:fmt('%.2f', mn, mx, step)
+                end
+                sl:tooltip(name)
+                return sl
+            end)
+            if ok and result then
+                slider_method = 'number_float'
+                return result
+            end
+        end
 
-        local bp = p_menu:button(label_plus)
-        bp:event(menu.event.click, function()
-            local s = is_rot and rot_steps[step_idx] or step_sizes[step_idx]
-            offset[key] = offset[key] + s
-            reattach()
-            safe_notify(key .. ': ' .. string.format('%.2f', offset[key]))
-        end)
+        -- Approach 2: slider(name, min, max, default, step)
+        if slider_method == 'none' or slider_method == 'slider' then
+            local ok, result = pcall(function()
+                local imin = math.floor(mn * 100)
+                local imax = math.floor(mx * 100)
+                local idef = math.floor(def * 100)
+                local istep = math.floor(step * 100)
+                if istep < 1 then istep = 1 end
+                local sl = p_menu:slider(name, imin, imax, idef, istep)
+                sl:tooltip(name)
+                return sl
+            end)
+            if ok and result then
+                slider_method = 'slider'
+                return result
+            end
+        end
+
+        -- Approach 3: number_int(name, min, max, default, step)
+        if slider_method == 'none' or slider_method == 'number_int' then
+            local ok, result = pcall(function()
+                local imin = math.floor(mn * 100)
+                local imax = math.floor(mx * 100)
+                local idef = math.floor(def * 100)
+                local istep = math.floor(step * 100)
+                if istep < 1 then istep = 1 end
+                local sl = p_menu:number_int(name, imin, imax, idef, istep)
+                sl:tooltip(name)
+                return sl
+            end)
+            if ok and result then
+                slider_method = 'number_int'
+                return result
+            end
+        end
+
+        -- Approach 4: number(name) with no chaining
+        if slider_method == 'none' or slider_method == 'number' then
+            local ok, result = pcall(function()
+                local sl = p_menu:number(name)
+                sl:tooltip(name)
+                return sl
+            end)
+            if ok and result then
+                slider_method = 'number'
+                return result
+            end
+        end
+
+        return nil -- all approaches failed
     end
 
-    make_axis('x',     '< Left',       'Right >',      false)
-    make_axis('y',     '< Back',       'Front >',      false)
-    make_axis('z',     '< Down',       'Up >',         false)
-    make_axis('pitch', '< Pitch Down', 'Pitch Up >',   true)
-    make_axis('roll',  '< Roll Left',  'Roll Right >', true)
-    make_axis('yaw',   '< Yaw Left',   'Yaw Right >',  true)
+    -- Position slider definitions: { key, name, min, max, default, step, is_rot }
+    local slider_defs = {
+        { 'x',     'Left / Right',  -15.0, 15.0, 0.0, 0.05, false },
+        { 'y',     'Front / Back',  -15.0, 15.0, 0.0, 0.05, false },
+        { 'z',     'Up / Down',     -15.0, 15.0, 0.0, 0.05, false },
+        { 'pitch', 'Pitch',        -360.0, 360.0, 0.0, 1.0, true },
+        { 'roll',  'Roll',         -360.0, 360.0, 0.0, 1.0, true },
+        { 'yaw',   'Yaw',          -360.0, 360.0, 0.0, 1.0, true },
+    }
 
-    --------------------------------------------------------------------
-    -- RESET
-    --------------------------------------------------------------------
-    local reset_btn = p_menu:button('Reset Position')
-    reset_btn:tooltip('Reset all position and rotation to 0')
-    reset_btn:event(menu.event.click, function()
-        offset.x = 0.0; offset.y = 0.0; offset.z = 0.0
-        offset.pitch = 0.0; offset.roll = 0.0; offset.yaw = 0.0
-        reattach()
-        safe_notify('Position reset to 0')
-    end)
+    -- Try to create sliders
+    for _, def in ipairs(slider_defs) do
+        local handle = try_slider(def[2], def[1], def[3], def[4], def[5], def[6], def[7])
+        if handle then
+            sliders[def[1]] = { handle = handle, is_rot = def[7] }
+        else
+            break -- if one fails, stop trying (all use same method)
+        end
+    end
+
+    local sliders_ok = (slider_method ~= 'none') and sliders.x and sliders.y and sliders.z
+
+    if sliders_ok then
+        safe_notify('Sliders loaded (' .. slider_method .. ')')
+
+        -- Read slider value (accounts for integer-based methods)
+        local function read_slider(key)
+            local s = sliders[key]
+            if not s then return offset[key] end
+            local ok, val = pcall(function() return s.handle.value end)
+            if not ok or val == nil then return offset[key] end
+            if slider_method == 'slider' or slider_method == 'number_int' then
+                return val / 100.0
+            end
+            return val
+        end
+
+        -- Write slider value
+        local function write_slider(key, v)
+            local s = sliders[key]
+            if not s then return end
+            pcall(function()
+                if slider_method == 'slider' or slider_method == 'number_int' then
+                    s.handle.value = math.floor(v * 100)
+                else
+                    s.handle.value = v
+                end
+            end)
+        end
+
+        -- Live update on slider change
+        local function live_update()
+            if not attached_vehicle then return end
+            if attached_player_name ~= pname then return end
+            offset.x = read_slider('x')
+            offset.y = read_slider('y')
+            offset.z = read_slider('z')
+            offset.pitch = read_slider('pitch')
+            offset.roll = read_slider('roll')
+            offset.yaw = read_slider('yaw')
+            pcall(do_attach, attached_vehicle,
+                offset.x, offset.y, offset.z,
+                offset.pitch, offset.roll, offset.yaw)
+        end
+
+        -- Attach change events to all sliders
+        for key, s in pairs(sliders) do
+            pcall(function()
+                s.handle:event(menu.event.change, function() live_update() end)
+            end)
+        end
+
+        -- Reset sliders button
+        local reset_btn = p_menu:button('Reset Sliders')
+        reset_btn:tooltip('Reset all position and rotation to 0')
+        reset_btn:event(menu.event.click, function()
+            offset.x = 0.0; offset.y = 0.0; offset.z = 0.0
+            offset.pitch = 0.0; offset.roll = 0.0; offset.yaw = 0.0
+            for key, _ in pairs(sliders) do
+                write_slider(key, 0.0)
+            end
+            live_update()
+            safe_notify('Sliders reset to 0')
+        end)
+    else
+        ------------------------------------------------------------
+        -- FALLBACK: +/- buttons (always work)
+        ------------------------------------------------------------
+        safe_notify('Using button controls (sliders unavailable)')
+
+        local step_sizes = { 0.05, 0.1, 0.25, 0.5, 1.0 }
+        local step_names = { '0.05', '0.1', '0.25', '0.5', '1.0' }
+        local rot_steps  = { 1.0, 5.0, 15.0, 30.0, 45.0 }
+        local rot_names  = { '1', '5', '15', '30', '45' }
+        local step_idx = 2
+
+        local step_btn = p_menu:button('Step: 0.1 | Rot: 5')
+        step_btn:tooltip('Click to cycle step size')
+        step_btn:event(menu.event.click, function()
+            step_idx = step_idx % #step_sizes + 1
+            safe_notify('Step: ' .. step_names[step_idx] .. ' | Rot: ' .. rot_names[step_idx])
+        end)
+
+        local function make_axis(key, label_minus, label_plus, is_rot)
+            local bm = p_menu:button(label_minus)
+            bm:event(menu.event.click, function()
+                local s = is_rot and rot_steps[step_idx] or step_sizes[step_idx]
+                offset[key] = offset[key] - s
+                reattach()
+                safe_notify(key .. ': ' .. string.format('%.2f', offset[key]))
+            end)
+            local bp = p_menu:button(label_plus)
+            bp:event(menu.event.click, function()
+                local s = is_rot and rot_steps[step_idx] or step_sizes[step_idx]
+                offset[key] = offset[key] + s
+                reattach()
+                safe_notify(key .. ': ' .. string.format('%.2f', offset[key]))
+            end)
+        end
+
+        make_axis('x',     '< Left',       'Right >',      false)
+        make_axis('y',     '< Back',       'Front >',      false)
+        make_axis('z',     '< Down',       'Up >',         false)
+        make_axis('pitch', '< Pitch Down', 'Pitch Up >',   true)
+        make_axis('roll',  '< Roll Left',  'Roll Right >', true)
+        make_axis('yaw',   '< Yaw Left',   'Yaw Right >',  true)
+
+        local reset_btn = p_menu:button('Reset Position')
+        reset_btn:tooltip('Reset all position and rotation to 0')
+        reset_btn:event(menu.event.click, function()
+            offset.x = 0.0; offset.y = 0.0; offset.z = 0.0
+            offset.pitch = 0.0; offset.roll = 0.0; offset.yaw = 0.0
+            reattach()
+            safe_notify('Position reset to 0')
+        end)
+    end
 
     return true
 end
