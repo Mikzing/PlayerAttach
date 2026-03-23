@@ -276,38 +276,38 @@ local function add_player_menu(player)
     local pname = player.name
 
     --------------------------------------------------------------------
-    -- Position sliders
+    -- Where on the vehicle (slide left/right, forward/back, up/down)
     --------------------------------------------------------------------
-    p_menu:breaker('Position')
+    p_menu:breaker('Where On Vehicle')
 
-    local sx = p_menu:number_float('Left / Right', menu.type.scroll)
+    local sx = p_menu:number_float('Sideways', menu.type.scroll)
         :fmt('%.2f', -15.0, 15.0, 0.05)
-        :tooltip('- Left / + Right')
+        :tooltip('Slide sideways on the vehicle. Negative = towards driver side, Positive = towards passenger side')
 
-    local sy = p_menu:number_float('Back / Forward', menu.type.scroll)
+    local sy = p_menu:number_float('Length', menu.type.scroll)
         :fmt('%.2f', -15.0, 15.0, 0.05)
-        :tooltip('- Backward / + Forward')
+        :tooltip('Slide along the vehicle. Negative = towards trunk/rear, Positive = towards hood/front')
 
-    local sz = p_menu:number_float('Down / Up', menu.type.scroll)
+    local sz = p_menu:number_float('Height', menu.type.scroll)
         :fmt('%.2f', -15.0, 15.0, 0.05)
-        :tooltip('- Down / + Up')
+        :tooltip('Move up or down. Negative = below vehicle, Positive = above vehicle (roof)')
 
     --------------------------------------------------------------------
-    -- Rotation sliders (Pitch, Roll, Yaw)
+    -- How your character faces (tilt and turn)
     --------------------------------------------------------------------
-    p_menu:breaker('Rotation')
+    p_menu:breaker('How You Face')
 
-    local sp = p_menu:number_float('Pitch', menu.type.scroll)
+    local sp = p_menu:number_float('Lean Forward/Back', menu.type.scroll)
         :fmt('%.1f', -180.0, 180.0, 1.0)
-        :tooltip('Tilt forward / backward')
+        :tooltip('Lean your body forward or backward. Like bending over or leaning back in a chair')
 
-    local srl = p_menu:number_float('Roll', menu.type.scroll)
+    local srl = p_menu:number_float('Tilt Sideways', menu.type.scroll)
         :fmt('%.1f', -180.0, 180.0, 1.0)
-        :tooltip('Tilt left / right')
+        :tooltip('Tilt your body to the left or right side. Like leaning out of a window')
 
-    local sy_rot = p_menu:number_float('Yaw', menu.type.scroll)
+    local sy_rot = p_menu:number_float('Turn Around', menu.type.scroll)
         :fmt('%.1f', -180.0, 180.0, 1.0)
-        :tooltip('Turn left / right (face direction)')
+        :tooltip('Spin your character to face a different direction. 0 = facing front of car, 180 = facing rear')
 
     --------------------------------------------------------------------
     -- Helper to get all current values and re-attach
@@ -331,9 +331,18 @@ local function add_player_menu(player)
     --------------------------------------------------------------------
     p_menu:breaker('Presets')
 
+    local preset_tips = {
+        'Stand on top of the roof',
+        'Sit on the front hood',
+        'Hang off the back trunk, facing behind',
+        'Cling to the driver side door',
+        'Cling to the passenger side door',
+        'Hang off the rear bumper, facing behind',
+    }
+
     for i, preset in ipairs(presets) do
         p_menu:button(preset[1])
-            :tooltip('Attach to ' .. preset[1] .. ' of their vehicle')
+            :tooltip(preset_tips[i] or 'Attach to ' .. preset[1])
             :event(menu.event.click, function()
                 local target = players.get(pid)
                 if not target or not target.exists or not target.connected then
