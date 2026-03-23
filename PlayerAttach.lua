@@ -18,7 +18,7 @@
 --
 
 local SCRIPT_NAME = 'Player Attach'
-local SCRIPT_VERSION = '2.0.0'
+local SCRIPT_VERSION = '2.1.0'
 
 -----------------------------------------------------------------------
 -- Permission check
@@ -326,6 +326,47 @@ detach_btn:event(menu.event.click, function()
 end)
 
 -----------------------------------------------------------------------
+-- Try to create a float slider. Tries multiple API patterns since
+-- different Lexis versions support different methods.
+-- Returns the slider object or nil if all attempts fail.
+-----------------------------------------------------------------------
+local function try_create_slider(parent, label, fmt_str, min_val, max_val, step)
+    -- Attempt 1: number_float with menu.type.scroll + fmt
+    local ok1, slider1 = pcall(function()
+        local s = parent:number_float(label, menu.type.scroll)
+        s:fmt(fmt_str, min_val, max_val, step)
+        return s
+    end)
+    if ok1 and slider1 then return slider1 end
+
+    -- Attempt 2: number_float with menu.type.scroll, no fmt
+    local ok2, slider2 = pcall(function()
+        return parent:number_float(label, menu.type.scroll)
+    end)
+    if ok2 and slider2 then return slider2 end
+
+    -- Attempt 3: number_float without type argument
+    local ok3, slider3 = pcall(function()
+        return parent:number_float(label)
+    end)
+    if ok3 and slider3 then return slider3 end
+
+    -- Attempt 4: slider (some menus use this instead)
+    local ok4, slider4 = pcall(function()
+        return parent:slider(label, min_val, max_val, 0.0, step)
+    end)
+    if ok4 and slider4 then return slider4 end
+
+    -- Attempt 5: slider_float
+    local ok5, slider5 = pcall(function()
+        return parent:slider_float(label, min_val, max_val, 0.0, step)
+    end)
+    if ok5 and slider5 then return slider5 end
+
+    return nil
+end
+
+-----------------------------------------------------------------------
 -- Create submenu for one player with full controls.
 -----------------------------------------------------------------------
 local function create_player_menu(pid, pname)
@@ -338,11 +379,11 @@ local function create_player_menu(pid, pname)
     -- Shared offset state (used by presets and attach button)
     local offset = { x = 0.0, y = 0.0, z = 0.0, pitch = 0.0, roll = 0.0, yaw = 0.0 }
 
-    -- Slider references (populated later if slider creation succeeds)
+    -- Slider references (nil if creation fails)
     local sliders = {}
 
     --------------------------------------------------------------------
-    -- PRESETS — use only :button() which is known to work
+    -- PRESETS
     --------------------------------------------------------------------
     for _, preset in ipairs(presets) do
         local btn = p_menu:button(preset[1])
@@ -361,7 +402,6 @@ local function create_player_menu(pid, pname)
             offset.roll = preset[6]
             offset.yaw = preset[7]
 
-            -- Sync sliders if they exist
             if sliders.sx then sliders.sx.value = preset[2] end
             if sliders.sy then sliders.sy.value = preset[3] end
             if sliders.sz then sliders.sz.value = preset[4] end
@@ -388,7 +428,6 @@ local function create_player_menu(pid, pname)
             return
         end
 
-        -- Read from sliders if they exist, otherwise use stored offset
         local x = sliders.sx and sliders.sx.value or offset.x
         local y = sliders.sy and sliders.sy.value or offset.y
         local z = sliders.sz and sliders.sz.value or offset.z
@@ -433,60 +472,41 @@ local function create_player_menu(pid, pname)
     end)
 
     --------------------------------------------------------------------
-    -- POSITION & ROTATION SLIDERS — in separate pcall so if breaker/
-    -- number_float/fmt don't exist, the buttons above still work.
+    -- POSITION SLIDERS — each created individually with fallbacks
     --------------------------------------------------------------------
-    pcall(function()
-        p_menu:breaker('Position')
+    sliders.sx = try_create_slider(p_menu, 'Left / Right', '%.2f', -15.0, 15.0, 0.05)
+    sliders.sy = try_create_slider(p_menu, 'Front / Back', '%.2f', -15.0, 15.0, 0.05)
+    sliders.sz = try_create_slider(p_menu, 'Up / Down', '%.2f', -15.0, 15.0, 0.05)
 
-        local sx = p_menu:number_float('Left / Right', menu.type.scroll)
-        sx:fmt('%.2f', -15.0, 15.0, 0.05)
-        sx:tooltip('Left or right')
-        sliders.sx = sx
+    --------------------------------------------------------------------
+    -- ROTATION SLIDERS
+    --------------------------------------------------------------------
+    sliders.sp = try_create_slider(p_menu, 'Pitch', '%.1f', -360.0, 360.0, 1.0)
+    sliders.srl = try_create_slider(p_menu, 'Roll', '%.1f', -360.0, 360.0, 1.0)
+    sliders.sy_rot = try_create_slider(p_menu, 'Yaw', '%.1f', -360.0, 360.0, 1.0)
 
-        local sy = p_menu:number_float('Front / Back', menu.type.scroll)
-        sy:fmt('%.2f', -15.0, 15.0, 0.05)
-        sy:tooltip('Front or back')
-        sliders.sy = sy
+    --------------------------------------------------------------------
+    -- Live update on slider change (only for sliders that exist)
+    --------------------------------------------------------------------
+    local function live_update()
+        if not attached_vehicle then return end
+        if attached_player_name ~= pname then return end
+        local x = sliders.sx and sliders.sx.value or offset.x
+        local y = sliders.sy and sliders.sy.value or offset.y
+        local z = sliders.sz and sliders.sz.value or offset.z
+        local p = sliders.sp and sliders.sp.value or offset.pitch
+        local r = sliders.srl and sliders.srl.value or offset.roll
+        local yw = sliders.sy_rot and sliders.sy_rot.value or offset.yaw
+        pcall(do_attach, attached_vehicle, x, y, z, p, r, yw)
+    end
 
-        local sz = p_menu:number_float('Up / Down', menu.type.scroll)
-        sz:fmt('%.2f', -15.0, 15.0, 0.05)
-        sz:tooltip('Up or down')
-        sliders.sz = sz
-
-        p_menu:breaker('Rotation')
-
-        local sp = p_menu:number_float('Pitch', menu.type.scroll)
-        sp:fmt('%.1f', -360.0, 360.0, 1.0)
-        sp:tooltip('Tilt forward or back')
-        sliders.sp = sp
-
-        local srl = p_menu:number_float('Roll', menu.type.scroll)
-        srl:fmt('%.1f', -360.0, 360.0, 1.0)
-        srl:tooltip('Tilt left or right')
-        sliders.srl = srl
-
-        local sy_rot = p_menu:number_float('Yaw', menu.type.scroll)
-        sy_rot:fmt('%.1f', -360.0, 360.0, 1.0)
-        sy_rot:tooltip('Face left or right')
-        sliders.sy_rot = sy_rot
-
-        -- Live update on slider change
-        local function live_update()
-            if not attached_vehicle then return end
-            if attached_player_name ~= pname then return end
-            pcall(do_attach, attached_vehicle,
-                sx.value, sy.value, sz.value,
-                sp.value, srl.value, sy_rot.value)
+    for _, key in ipairs({'sx', 'sy', 'sz', 'sp', 'srl', 'sy_rot'}) do
+        if sliders[key] then
+            pcall(function()
+                sliders[key]:event(menu.event.change, function() live_update() end)
+            end)
         end
-
-        sx:event(menu.event.change, function() live_update() end)
-        sy:event(menu.event.change, function() live_update() end)
-        sz:event(menu.event.change, function() live_update() end)
-        sp:event(menu.event.change, function() live_update() end)
-        srl:event(menu.event.change, function() live_update() end)
-        sy_rot:event(menu.event.change, function() live_update() end)
-    end)
+    end
 
     --------------------------------------------------------------------
     -- RESET SLIDERS button
@@ -496,12 +516,11 @@ local function create_player_menu(pid, pname)
     reset_btn:event(menu.event.click, function()
         offset.x = 0.0; offset.y = 0.0; offset.z = 0.0
         offset.pitch = 0.0; offset.roll = 0.0; offset.yaw = 0.0
-        if sliders.sx then sliders.sx.value = 0.0 end
-        if sliders.sy then sliders.sy.value = 0.0 end
-        if sliders.sz then sliders.sz.value = 0.0 end
-        if sliders.sp then sliders.sp.value = 0.0 end
-        if sliders.srl then sliders.srl.value = 0.0 end
-        if sliders.sy_rot then sliders.sy_rot.value = 0.0 end
+        for _, key in ipairs({'sx', 'sy', 'sz', 'sp', 'srl', 'sy_rot'}) do
+            if sliders[key] then
+                pcall(function() sliders[key].value = 0.0 end)
+            end
+        end
         safe_notify('Sliders reset')
     end)
 
@@ -529,7 +548,6 @@ local function refresh_players()
         return
     end
 
-    -- Get my id
     local ok_me, my = pcall(players.me)
     local my_id = -1
     if ok_me and my then
@@ -538,8 +556,6 @@ local function refresh_players()
     end
 
     -- Build set of current VALID players: pid -> name
-    -- players.list() returns ALL 32 GTA slots. Filter to real players
-    -- by verifying they have a ped that exists in the game world.
     local current = {}
     for _, player in ipairs(player_list) do
         local p_ok, p_id, p_name = pcall(function()
@@ -581,8 +597,29 @@ local function refresh_players()
 end
 
 -----------------------------------------------------------------------
+-- Cleanup thread — silently removes departed players every 5 seconds.
+-- Does NOT add new players (no notification spam). Only removes stale.
+-----------------------------------------------------------------------
+util.create_thread(function()
+    while true do
+        util.yield(5000)
+
+        -- Check each tracked player, remove if no longer valid
+        for pid, entry in pairs(player_entries) do
+            if not is_valid_player(pid) then
+                if attached_player_name and entry.name == attached_player_name then
+                    do_detach()
+                    safe_notify('Auto-detached: ' .. entry.name .. ' left', { icon = notify.icon.hazard })
+                end
+                remove_player(pid)
+            end
+        end
+    end
+end)
+
+-----------------------------------------------------------------------
 -- Refresh button — runs in a thread so util.yield is available
--- This is the ONLY way to refresh. No auto-refresh.
+-- This is the ONLY way to ADD new players. No auto-add.
 -----------------------------------------------------------------------
 local refresh_requested = false
 
@@ -592,7 +629,6 @@ refresh_btn:event(menu.event.click, function()
     refresh_requested = true
 end)
 
--- Single thread that processes refresh requests
 util.create_thread(function()
     while true do
         util.yield(250)
