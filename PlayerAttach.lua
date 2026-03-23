@@ -18,7 +18,7 @@
 --
 
 local SCRIPT_NAME = 'Player Attach'
-local SCRIPT_VERSION = '3.0.0'
+local SCRIPT_VERSION = '3.1.0'
 
 -----------------------------------------------------------------------
 -- Permission check
@@ -348,10 +348,11 @@ local function create_player_menu(pid, pname)
     end
 
     --------------------------------------------------------------------
-    -- PRESETS
+    -- PRESETS — inside a submenu to stay within item limit
     --------------------------------------------------------------------
+    local preset_menu = p_menu:submenu('Presets')
     for _, preset in ipairs(presets) do
-        local btn = p_menu:button(preset[1])
+        local btn = preset_menu:button(preset[1])
         btn:tooltip('Attach at ' .. preset[1])
         btn:event(menu.event.click, function()
             local veh = get_player_vehicle(pid)
