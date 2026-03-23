@@ -18,7 +18,7 @@
 --
 
 local SCRIPT_NAME = 'Player Attach'
-local SCRIPT_VERSION = '1.7.0'
+local SCRIPT_VERSION = '1.8.0'
 
 -----------------------------------------------------------------------
 -- Permission check
@@ -40,6 +40,7 @@ local N_DETACH_ENTITY                          = 0x961AC54BF0613F5D
 local N_IS_ENTITY_ATTACHED                     = 0xB346476EF1A64897
 local N_SET_ENTITY_COMPLETELY_DISABLE_COLLISION = 0x1A9205C1B9EE827F
 local N_DOES_ENTITY_EXIST                      = 0x7239B21A38F536BA
+local N_GET_ENTITY_MODEL                       = 0x9F47B058362C84B5
 
 -----------------------------------------------------------------------
 -- Safe native call wrapper
@@ -147,6 +148,22 @@ local function is_entity_attached(entity)
         return false
     end
     return native_to_bool(call_native(N_IS_ENTITY_ATTACHED, entity))
+end
+
+-----------------------------------------------------------------------
+-- Check if a player slot is real (has a valid ped in the game world)
+-----------------------------------------------------------------------
+local function is_valid_player(pid)
+    local ok, target = pcall(players.get, pid)
+    if not ok or not target then
+        return false
+    end
+    -- Check if the player has a ped handle that actually exists
+    local ok2, ped = pcall(function() return target.ped end)
+    if not ok2 or not ped or ped == 0 then
+        return false
+    end
+    return entity_exists(ped)
 end
 
 -----------------------------------------------------------------------
@@ -295,193 +312,209 @@ detach_btn:event(menu.event.click, function()
 end)
 
 -----------------------------------------------------------------------
+-- Helper: get a player's vehicle handle (returns nil if not in vehicle)
+-----------------------------------------------------------------------
+local function get_player_vehicle(pid)
+    local ok, target = pcall(players.get, pid)
+    if not ok or not target then return nil end
+    local ok2, veh = pcall(function()
+        if target.in_vehicle and target.vehicle and target.vehicle ~= 0 then
+            return target.vehicle
+        end
+        return nil
+    end)
+    if ok2 then return veh end
+    return nil
+end
+
+-----------------------------------------------------------------------
 -- Create submenu for one player.
--- IMPORTANT: Track the submenu IMMEDIATELY after root:submenu() so
--- that even if later menu setup throws, we never create an orphan
--- that would cause duplicates on next refresh.
+-- Attach/Detach buttons are created FIRST so they always exist.
+-- Sliders and presets are wrapped separately — if they fail, the
+-- core buttons still work.
 -----------------------------------------------------------------------
 local function create_player_menu(pid, pname)
-    local label = pname .. ' [On Foot]'
-
-    -- Try to check vehicle status for label
-    local ok_t, target = pcall(players.get, pid)
-    if ok_t and target then
-        local ok_v, in_veh = pcall(function() return target.in_vehicle end)
-        if ok_v and in_veh then
-            label = pname
-        end
-    end
+    local label = pname
 
     local p_menu = root:submenu(label)
     if not p_menu then return false end
 
-    -- Track IMMEDIATELY — even if setup below fails, this pid is "taken"
-    -- so we never create a duplicate submenu for the same player.
+    -- Track IMMEDIATELY — prevents duplicate submenus
     player_entries[pid] = { menu = p_menu, name = pname }
 
-    -- Everything below is best-effort. If any part throws, the submenu
-    -- still exists and is tracked. The player just gets a partial menu.
+    -- Shared offset state for this player menu
+    local offset = { x = 0.0, y = 0.0, z = 0.0, pitch = 0.0, roll = 0.0, yaw = 0.0 }
+
+    -- Slider references (may be nil if slider creation fails)
+    local sliders = {}
 
     --------------------------------------------------------------------
-    -- Position
+    -- PRESETS — created first so they always appear
     --------------------------------------------------------------------
-    p_menu:breaker('Position')
+    for _, preset in ipairs(presets) do
+        local ok_btn, btn = pcall(function() return p_menu:button(preset[1]) end)
+        if ok_btn and btn then
+            pcall(function() btn:tooltip('Attach at ' .. preset[1]) end)
+            btn:event(menu.event.click, function()
+                local veh = get_player_vehicle(pid)
+                if not veh then
+                    safe_notify(pname .. ' is not in a vehicle')
+                    return
+                end
 
-    local sx = p_menu:number_float('Left / Right', menu.type.scroll)
-    sx:fmt('%.2f', -15.0, 15.0, 0.05)
-    sx:tooltip('Left or right')
+                offset.x = preset[2]
+                offset.y = preset[3]
+                offset.z = preset[4]
+                offset.pitch = preset[5]
+                offset.roll = preset[6]
+                offset.yaw = preset[7]
 
-    local sy = p_menu:number_float('Front / Back', menu.type.scroll)
-    sy:fmt('%.2f', -15.0, 15.0, 0.05)
-    sy:tooltip('Front or back')
+                -- Update sliders if they exist
+                if sliders.sx then sliders.sx.value = preset[2] end
+                if sliders.sy then sliders.sy.value = preset[3] end
+                if sliders.sz then sliders.sz.value = preset[4] end
+                if sliders.sp then sliders.sp.value = preset[5] end
+                if sliders.srl then sliders.srl.value = preset[6] end
+                if sliders.sy_rot then sliders.sy_rot.value = preset[7] end
 
-    local sz = p_menu:number_float('Up / Down', menu.type.scroll)
-    sz:fmt('%.2f', -15.0, 15.0, 0.05)
-    sz:tooltip('Up or down')
-
-    --------------------------------------------------------------------
-    -- Rotation
-    --------------------------------------------------------------------
-    p_menu:breaker('Rotation')
-
-    local sp = p_menu:number_float('Pitch', menu.type.scroll)
-    sp:fmt('%.1f', -360.0, 360.0, 1.0)
-    sp:tooltip('Tilt forward or back')
-
-    local srl = p_menu:number_float('Roll', menu.type.scroll)
-    srl:fmt('%.1f', -360.0, 360.0, 1.0)
-    srl:tooltip('Tilt left or right')
-
-    local sy_rot = p_menu:number_float('Yaw', menu.type.scroll)
-    sy_rot:fmt('%.1f', -360.0, 360.0, 1.0)
-    sy_rot:tooltip('Face left or right')
-
-    --------------------------------------------------------------------
-    -- Live update helper
-    --------------------------------------------------------------------
-    local function live_update()
-        if not attached_vehicle then return end
-        if attached_player_name ~= pname then return end
-        pcall(do_attach, attached_vehicle,
-            sx.value, sy.value, sz.value,
-            sp.value, srl.value, sy_rot.value)
+                if do_attach(veh, preset[2], preset[3], preset[4], preset[5], preset[6], preset[7]) then
+                    attached_player_name = pname
+                    safe_notify('Attached to ' .. pname .. ' (' .. preset[1] .. ')')
+                end
+            end)
+        end
     end
 
-    sx:event(menu.event.change, function() live_update() end)
-    sy:event(menu.event.change, function() live_update() end)
-    sz:event(menu.event.change, function() live_update() end)
-    sp:event(menu.event.change, function() live_update() end)
-    srl:event(menu.event.change, function() live_update() end)
-    sy_rot:event(menu.event.change, function() live_update() end)
-
     --------------------------------------------------------------------
-    -- Presets
+    -- ATTACH button
     --------------------------------------------------------------------
-    p_menu:breaker('Presets')
-
-    for _, preset in ipairs(presets) do
-        local btn = p_menu:button(preset[1])
-        btn:tooltip(preset[1])
-        btn:event(menu.event.click, function()
-            local ok_tg, tgt = pcall(players.get, pid)
-            if not ok_tg or not tgt then
-                safe_notify('Player no longer in session')
-                return
-            end
-
-            local ok_iv, in_v = pcall(function() return tgt.in_vehicle end)
-            local ok_vh, veh = pcall(function() return tgt.vehicle end)
-            if not (ok_iv and in_v) or not (ok_vh and veh) or veh == 0 then
+    local ok_ab, attach_btn = pcall(function() return p_menu:button('Attach') end)
+    if ok_ab and attach_btn then
+        pcall(function() attach_btn:tooltip('Attach with current offset values') end)
+        attach_btn:event(menu.event.click, function()
+            local veh = get_player_vehicle(pid)
+            if not veh then
                 safe_notify(pname .. ' is not in a vehicle')
                 return
             end
 
-            sx.value = preset[2]
-            sy.value = preset[3]
-            sz.value = preset[4]
-            sp.value = preset[5]
-            srl.value = preset[6]
-            sy_rot.value = preset[7]
+            -- Read from sliders if they exist, otherwise use stored offset
+            local x = sliders.sx and sliders.sx.value or offset.x
+            local y = sliders.sy and sliders.sy.value or offset.y
+            local z = sliders.sz and sliders.sz.value or offset.z
+            local p = sliders.sp and sliders.sp.value or offset.pitch
+            local r = sliders.srl and sliders.srl.value or offset.roll
+            local yw = sliders.sy_rot and sliders.sy_rot.value or offset.yaw
 
-            if do_attach(veh, preset[2], preset[3], preset[4], preset[5], preset[6], preset[7]) then
+            if do_attach(veh, x, y, z, p, r, yw) then
                 attached_player_name = pname
-                safe_notify('Attached to ' .. pname .. ' (' .. preset[1] .. ')')
+                safe_notify('Attached to ' .. pname)
             end
         end)
     end
 
     --------------------------------------------------------------------
-    -- Actions
+    -- DETACH button
     --------------------------------------------------------------------
-    p_menu:breaker('Actions')
-
-    local attach_btn = p_menu:button('Attach')
-    attach_btn:tooltip('Attach using the position and rotation values above')
-    attach_btn:event(menu.event.click, function()
-        local ok_tg, tgt = pcall(players.get, pid)
-        if not ok_tg or not tgt then
-            safe_notify('Player no longer in session')
-            return
-        end
-
-        local ok_me2, my2 = pcall(players.me)
-        if ok_me2 and my2 then
-            local ok_mid, mid = pcall(function() return my2.id end)
-            if ok_mid and mid and pid == mid then
-                safe_notify('Cannot attach to yourself')
-                return
+    local ok_db, detach_btn2 = pcall(function() return p_menu:button('Detach') end)
+    if ok_db and detach_btn2 then
+        pcall(function() detach_btn2:tooltip('Detach from this player') end)
+        detach_btn2:event(menu.event.click, function()
+            if attached_vehicle then
+                do_detach()
+                safe_notify('Detached')
+            else
+                safe_notify('Not attached to anything')
             end
-        end
+        end)
+    end
 
-        local ok_iv, in_v = pcall(function() return tgt.in_vehicle end)
-        local ok_vh, veh = pcall(function() return tgt.vehicle end)
-        if not (ok_iv and in_v) or not (ok_vh and veh) or veh == 0 then
-            safe_notify(pname .. ' is not in a vehicle')
-            return
-        end
-
-        if do_attach(veh, sx.value, sy.value, sz.value, sp.value, srl.value, sy_rot.value) then
-            attached_player_name = pname
-            safe_notify('Attached to ' .. pname)
-        end
-    end)
-
-    local detach_btn2 = p_menu:button('Detach')
-    detach_btn2:tooltip('Detach from this player\'s vehicle')
-    detach_btn2:event(menu.event.click, function()
-        if attached_vehicle then
-            do_detach()
-            safe_notify('Detached')
-        else
-            safe_notify('Not attached to anything')
-        end
-    end)
-
-    local reset_btn = p_menu:button('Reset Sliders')
-    reset_btn:tooltip('Reset all position and rotation sliders to 0')
-    reset_btn:event(menu.event.click, function()
-        sx.value = 0.0
-        sy.value = 0.0
-        sz.value = 0.0
-        sp.value = 0.0
-        srl.value = 0.0
-        sy_rot.value = 0.0
-        live_update()
-        safe_notify('Sliders reset')
-    end)
-
-    local col_toggle = p_menu:toggle('Disable Collision')
-    col_toggle:tooltip('Clip through the vehicle instead of colliding with it')
-    col_toggle:event(menu.event.change, function(val)
-        collision_disabled = val
-        if attached_vehicle and collision_disabled then
-            local entity = get_my_entity()
-            if entity then
-                call_native(N_SET_ENTITY_COMPLETELY_DISABLE_COLLISION, entity, 0, 0)
+    --------------------------------------------------------------------
+    -- DISABLE COLLISION toggle
+    --------------------------------------------------------------------
+    local ok_ct, col_toggle = pcall(function() return p_menu:toggle('Disable Collision') end)
+    if ok_ct and col_toggle then
+        pcall(function() col_toggle:tooltip('Clip through the vehicle') end)
+        col_toggle:event(menu.event.change, function(val)
+            collision_disabled = val
+            if attached_vehicle and collision_disabled then
+                local entity = get_my_entity()
+                if entity then
+                    call_native(N_SET_ENTITY_COMPLETELY_DISABLE_COLLISION, entity, 0, 0)
+                end
             end
-            safe_notify('Collision disabled')
+        end)
+    end
+
+    --------------------------------------------------------------------
+    -- POSITION SLIDERS — wrapped in pcall, optional
+    --------------------------------------------------------------------
+    pcall(function()
+        local sx = p_menu:number_float('Left / Right', menu.type.scroll)
+        sx:fmt('%.2f', -15.0, 15.0, 0.05)
+        sx:tooltip('Left or right')
+        sliders.sx = sx
+
+        local sy = p_menu:number_float('Front / Back', menu.type.scroll)
+        sy:fmt('%.2f', -15.0, 15.0, 0.05)
+        sy:tooltip('Front or back')
+        sliders.sy = sy
+
+        local sz = p_menu:number_float('Up / Down', menu.type.scroll)
+        sz:fmt('%.2f', -15.0, 15.0, 0.05)
+        sz:tooltip('Up or down')
+        sliders.sz = sz
+
+        local sp = p_menu:number_float('Pitch', menu.type.scroll)
+        sp:fmt('%.1f', -360.0, 360.0, 1.0)
+        sp:tooltip('Tilt forward or back')
+        sliders.sp = sp
+
+        local srl = p_menu:number_float('Roll', menu.type.scroll)
+        srl:fmt('%.1f', -360.0, 360.0, 1.0)
+        srl:tooltip('Tilt left or right')
+        sliders.srl = srl
+
+        local sy_rot = p_menu:number_float('Yaw', menu.type.scroll)
+        sy_rot:fmt('%.1f', -360.0, 360.0, 1.0)
+        sy_rot:tooltip('Face left or right')
+        sliders.sy_rot = sy_rot
+
+        -- Live update on slider change
+        local function live_update()
+            if not attached_vehicle then return end
+            if attached_player_name ~= pname then return end
+            pcall(do_attach, attached_vehicle,
+                sx.value, sy.value, sz.value,
+                sp.value, srl.value, sy_rot.value)
         end
+
+        sx:event(menu.event.change, function() live_update() end)
+        sy:event(menu.event.change, function() live_update() end)
+        sz:event(menu.event.change, function() live_update() end)
+        sp:event(menu.event.change, function() live_update() end)
+        srl:event(menu.event.change, function() live_update() end)
+        sy_rot:event(menu.event.change, function() live_update() end)
     end)
+
+    --------------------------------------------------------------------
+    -- RESET SLIDERS button
+    --------------------------------------------------------------------
+    local ok_rb, reset_btn = pcall(function() return p_menu:button('Reset Sliders') end)
+    if ok_rb and reset_btn then
+        pcall(function() reset_btn:tooltip('Reset all offsets to 0') end)
+        reset_btn:event(menu.event.click, function()
+            offset.x = 0.0; offset.y = 0.0; offset.z = 0.0
+            offset.pitch = 0.0; offset.roll = 0.0; offset.yaw = 0.0
+            if sliders.sx then sliders.sx.value = 0.0 end
+            if sliders.sy then sliders.sy.value = 0.0 end
+            if sliders.sz then sliders.sz.value = 0.0 end
+            if sliders.sp then sliders.sp.value = 0.0 end
+            if sliders.srl then sliders.srl.value = 0.0 end
+            if sliders.sy_rot then sliders.sy_rot.value = 0.0 end
+            safe_notify('Sliders reset')
+        end)
+    end
 
     return true
 end
@@ -498,7 +531,7 @@ end
 
 -----------------------------------------------------------------------
 -- Refresh: scan player list, add new, remove departed.
--- Only called from coroutine threads or on startup.
+-- Only called from the refresh thread.
 -----------------------------------------------------------------------
 local function refresh_players()
     local ok, player_list = pcall(players.list)
@@ -516,8 +549,8 @@ local function refresh_players()
     end
 
     -- Build set of current VALID players: pid -> name
-    -- players.list() returns ALL 32 GTA slots, most are empty.
-    -- Filter out empty/invalid slots by checking the name.
+    -- players.list() returns ALL 32 GTA slots. Filter to real players
+    -- by verifying they have a ped that exists in the game world.
     local current = {}
     for _, player in ipairs(player_list) do
         local p_ok, p_id, p_name = pcall(function()
@@ -525,8 +558,7 @@ local function refresh_players()
         end)
         if p_ok and p_id and p_id ~= my_id and p_name then
             local name_str = tostring(p_name)
-            -- Skip empty slots: no name, blank name, or "Invalid" placeholder
-            if name_str ~= '' and name_str ~= 'Invalid' and name_str ~= 'Unknown' and #name_str > 0 then
+            if #name_str > 0 and is_valid_player(p_id) then
                 current[p_id] = name_str
             end
         end
@@ -547,8 +579,6 @@ local function refresh_players()
     local added = 0
     for pid, pname in pairs(current) do
         if not player_entries[pid] then
-            -- create_player_menu tracks immediately in player_entries,
-            -- so even if it partially fails, no duplicate is possible.
             pcall(create_player_menu, pid, pname)
             if player_entries[pid] then
                 added = added + 1
