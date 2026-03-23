@@ -18,7 +18,7 @@
 --
 
 local SCRIPT_NAME = 'Player Attach'
-local SCRIPT_VERSION = '1.9.0'
+local SCRIPT_VERSION = '2.0.0'
 
 -----------------------------------------------------------------------
 -- Permission check
@@ -335,63 +335,15 @@ local function create_player_menu(pid, pname)
     -- Track IMMEDIATELY — prevents duplicate submenus
     player_entries[pid] = { menu = p_menu, name = pname }
 
-    --------------------------------------------------------------------
-    -- Position sliders
-    --------------------------------------------------------------------
-    p_menu:breaker('Position')
+    -- Shared offset state (used by presets and attach button)
+    local offset = { x = 0.0, y = 0.0, z = 0.0, pitch = 0.0, roll = 0.0, yaw = 0.0 }
 
-    local sx = p_menu:number_float('Left / Right', menu.type.scroll)
-    sx:fmt('%.2f', -15.0, 15.0, 0.05)
-    sx:tooltip('Left or right')
-
-    local sy = p_menu:number_float('Front / Back', menu.type.scroll)
-    sy:fmt('%.2f', -15.0, 15.0, 0.05)
-    sy:tooltip('Front or back')
-
-    local sz = p_menu:number_float('Up / Down', menu.type.scroll)
-    sz:fmt('%.2f', -15.0, 15.0, 0.05)
-    sz:tooltip('Up or down')
+    -- Slider references (populated later if slider creation succeeds)
+    local sliders = {}
 
     --------------------------------------------------------------------
-    -- Rotation sliders
+    -- PRESETS — use only :button() which is known to work
     --------------------------------------------------------------------
-    p_menu:breaker('Rotation')
-
-    local sp = p_menu:number_float('Pitch', menu.type.scroll)
-    sp:fmt('%.1f', -360.0, 360.0, 1.0)
-    sp:tooltip('Tilt forward or back')
-
-    local srl = p_menu:number_float('Roll', menu.type.scroll)
-    srl:fmt('%.1f', -360.0, 360.0, 1.0)
-    srl:tooltip('Tilt left or right')
-
-    local sy_rot = p_menu:number_float('Yaw', menu.type.scroll)
-    sy_rot:fmt('%.1f', -360.0, 360.0, 1.0)
-    sy_rot:tooltip('Face left or right')
-
-    --------------------------------------------------------------------
-    -- Live update on slider change
-    --------------------------------------------------------------------
-    local function live_update()
-        if not attached_vehicle then return end
-        if attached_player_name ~= pname then return end
-        pcall(do_attach, attached_vehicle,
-            sx.value, sy.value, sz.value,
-            sp.value, srl.value, sy_rot.value)
-    end
-
-    sx:event(menu.event.change, function() live_update() end)
-    sy:event(menu.event.change, function() live_update() end)
-    sz:event(menu.event.change, function() live_update() end)
-    sp:event(menu.event.change, function() live_update() end)
-    srl:event(menu.event.change, function() live_update() end)
-    sy_rot:event(menu.event.change, function() live_update() end)
-
-    --------------------------------------------------------------------
-    -- Presets
-    --------------------------------------------------------------------
-    p_menu:breaker('Presets')
-
     for _, preset in ipairs(presets) do
         local btn = p_menu:button(preset[1])
         btn:tooltip('Attach at ' .. preset[1])
@@ -402,12 +354,20 @@ local function create_player_menu(pid, pname)
                 return
             end
 
-            sx.value = preset[2]
-            sy.value = preset[3]
-            sz.value = preset[4]
-            sp.value = preset[5]
-            srl.value = preset[6]
-            sy_rot.value = preset[7]
+            offset.x = preset[2]
+            offset.y = preset[3]
+            offset.z = preset[4]
+            offset.pitch = preset[5]
+            offset.roll = preset[6]
+            offset.yaw = preset[7]
+
+            -- Sync sliders if they exist
+            if sliders.sx then sliders.sx.value = preset[2] end
+            if sliders.sy then sliders.sy.value = preset[3] end
+            if sliders.sz then sliders.sz.value = preset[4] end
+            if sliders.sp then sliders.sp.value = preset[5] end
+            if sliders.srl then sliders.srl.value = preset[6] end
+            if sliders.sy_rot then sliders.sy_rot.value = preset[7] end
 
             if do_attach(veh, preset[2], preset[3], preset[4], preset[5], preset[6], preset[7]) then
                 attached_player_name = pname
@@ -417,12 +377,10 @@ local function create_player_menu(pid, pname)
     end
 
     --------------------------------------------------------------------
-    -- Actions
+    -- ATTACH button
     --------------------------------------------------------------------
-    p_menu:breaker('Actions')
-
     local attach_btn = p_menu:button('Attach')
-    attach_btn:tooltip('Attach with current slider values')
+    attach_btn:tooltip('Attach with current offset values')
     attach_btn:event(menu.event.click, function()
         local veh = get_player_vehicle(pid)
         if not veh then
@@ -430,12 +388,23 @@ local function create_player_menu(pid, pname)
             return
         end
 
-        if do_attach(veh, sx.value, sy.value, sz.value, sp.value, srl.value, sy_rot.value) then
+        -- Read from sliders if they exist, otherwise use stored offset
+        local x = sliders.sx and sliders.sx.value or offset.x
+        local y = sliders.sy and sliders.sy.value or offset.y
+        local z = sliders.sz and sliders.sz.value or offset.z
+        local p = sliders.sp and sliders.sp.value or offset.pitch
+        local r = sliders.srl and sliders.srl.value or offset.roll
+        local yw = sliders.sy_rot and sliders.sy_rot.value or offset.yaw
+
+        if do_attach(veh, x, y, z, p, r, yw) then
             attached_player_name = pname
             safe_notify('Attached to ' .. pname)
         end
     end)
 
+    --------------------------------------------------------------------
+    -- DETACH button
+    --------------------------------------------------------------------
     local detach_btn2 = p_menu:button('Detach')
     detach_btn2:tooltip('Detach from this player')
     detach_btn2:event(menu.event.click, function()
@@ -447,31 +416,94 @@ local function create_player_menu(pid, pname)
         end
     end)
 
-    local reset_btn = p_menu:button('Reset Sliders')
-    reset_btn:tooltip('Reset all position and rotation sliders to 0')
-    reset_btn:event(menu.event.click, function()
-        sx.value = 0.0
-        sy.value = 0.0
-        sz.value = 0.0
-        sp.value = 0.0
-        srl.value = 0.0
-        sy_rot.value = 0.0
-        live_update()
-        safe_notify('Sliders reset')
+    --------------------------------------------------------------------
+    -- DISABLE COLLISION toggle
+    --------------------------------------------------------------------
+    local col_toggle = p_menu:toggle('Disable Collision')
+    col_toggle:tooltip('Clip through the vehicle instead of colliding with it')
+    col_toggle:event(menu.event.change, function(val)
+        collision_disabled = val
+        if attached_vehicle and collision_disabled then
+            local entity = get_my_entity()
+            if entity then
+                call_native(N_SET_ENTITY_COMPLETELY_DISABLE_COLLISION, entity, 0, 0)
+            end
+            safe_notify('Collision disabled')
+        end
     end)
 
-    p_menu:toggle('Disable Collision')
-        :tooltip('Clip through the vehicle instead of colliding with it')
-        :event(menu.event.change, function(val)
-            collision_disabled = val
-            if attached_vehicle and collision_disabled then
-                local entity = get_my_entity()
-                if entity then
-                    call_native(N_SET_ENTITY_COMPLETELY_DISABLE_COLLISION, entity, 0, 0)
-                end
-                safe_notify('Collision disabled')
-            end
-        end)
+    --------------------------------------------------------------------
+    -- POSITION & ROTATION SLIDERS — in separate pcall so if breaker/
+    -- number_float/fmt don't exist, the buttons above still work.
+    --------------------------------------------------------------------
+    pcall(function()
+        p_menu:breaker('Position')
+
+        local sx = p_menu:number_float('Left / Right', menu.type.scroll)
+        sx:fmt('%.2f', -15.0, 15.0, 0.05)
+        sx:tooltip('Left or right')
+        sliders.sx = sx
+
+        local sy = p_menu:number_float('Front / Back', menu.type.scroll)
+        sy:fmt('%.2f', -15.0, 15.0, 0.05)
+        sy:tooltip('Front or back')
+        sliders.sy = sy
+
+        local sz = p_menu:number_float('Up / Down', menu.type.scroll)
+        sz:fmt('%.2f', -15.0, 15.0, 0.05)
+        sz:tooltip('Up or down')
+        sliders.sz = sz
+
+        p_menu:breaker('Rotation')
+
+        local sp = p_menu:number_float('Pitch', menu.type.scroll)
+        sp:fmt('%.1f', -360.0, 360.0, 1.0)
+        sp:tooltip('Tilt forward or back')
+        sliders.sp = sp
+
+        local srl = p_menu:number_float('Roll', menu.type.scroll)
+        srl:fmt('%.1f', -360.0, 360.0, 1.0)
+        srl:tooltip('Tilt left or right')
+        sliders.srl = srl
+
+        local sy_rot = p_menu:number_float('Yaw', menu.type.scroll)
+        sy_rot:fmt('%.1f', -360.0, 360.0, 1.0)
+        sy_rot:tooltip('Face left or right')
+        sliders.sy_rot = sy_rot
+
+        -- Live update on slider change
+        local function live_update()
+            if not attached_vehicle then return end
+            if attached_player_name ~= pname then return end
+            pcall(do_attach, attached_vehicle,
+                sx.value, sy.value, sz.value,
+                sp.value, srl.value, sy_rot.value)
+        end
+
+        sx:event(menu.event.change, function() live_update() end)
+        sy:event(menu.event.change, function() live_update() end)
+        sz:event(menu.event.change, function() live_update() end)
+        sp:event(menu.event.change, function() live_update() end)
+        srl:event(menu.event.change, function() live_update() end)
+        sy_rot:event(menu.event.change, function() live_update() end)
+    end)
+
+    --------------------------------------------------------------------
+    -- RESET SLIDERS button
+    --------------------------------------------------------------------
+    local reset_btn = p_menu:button('Reset Sliders')
+    reset_btn:tooltip('Reset all offsets to 0')
+    reset_btn:event(menu.event.click, function()
+        offset.x = 0.0; offset.y = 0.0; offset.z = 0.0
+        offset.pitch = 0.0; offset.roll = 0.0; offset.yaw = 0.0
+        if sliders.sx then sliders.sx.value = 0.0 end
+        if sliders.sy then sliders.sy.value = 0.0 end
+        if sliders.sz then sliders.sz.value = 0.0 end
+        if sliders.sp then sliders.sp.value = 0.0 end
+        if sliders.srl then sliders.srl.value = 0.0 end
+        if sliders.sy_rot then sliders.sy_rot.value = 0.0 end
+        safe_notify('Sliders reset')
+    end)
 
     return true
 end
