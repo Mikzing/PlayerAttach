@@ -18,7 +18,7 @@
 --
 
 local SCRIPT_NAME = 'Player Attach'
-local SCRIPT_VERSION = '2.2.0'
+local SCRIPT_VERSION = '2.3.0'
 
 -----------------------------------------------------------------------
 -- Permission check
@@ -327,8 +327,6 @@ end)
 
 -----------------------------------------------------------------------
 -- Create submenu for one player with full controls.
--- Uses button-based +/- controls for position since Lexis does not
--- support number_float / slider / slider_float.
 -----------------------------------------------------------------------
 local function create_player_menu(pid, pname)
     local p_menu = root:submenu(pname)
@@ -337,28 +335,63 @@ local function create_player_menu(pid, pname)
     -- Track IMMEDIATELY — prevents duplicate submenus
     player_entries[pid] = { menu = p_menu, name = pname }
 
-    -- Current offset values
-    local offset = { x = 0.0, y = 0.0, z = 0.0, pitch = 0.0, roll = 0.0, yaw = 0.0 }
+    --------------------------------------------------------------------
+    -- Position sliders
+    --------------------------------------------------------------------
+    p_menu:breaker('Position')
 
-    -- Step size: 0 = fine (0.1), 1 = medium (0.5), 2 = coarse (1.0)
-    local step_mode = 0
-    local step_sizes = { 0.1, 0.5, 1.0 }
-    local step_names = { 'Fine (0.1)', 'Medium (0.5)', 'Coarse (1.0)' }
-    local rot_step_sizes = { 5.0, 15.0, 45.0 }
-    local rot_step_names = { 'Fine (5)', 'Medium (15)', 'Coarse (45)' }
+    local sx = p_menu:number_float('Left / Right', menu.type.scroll)
+        :fmt('%.2f', -15.0, 15.0, 0.05)
+        :tooltip('Left or right')
 
-    -- Helper: reattach with current offsets if already attached to this player
-    local function reattach_if_active()
+    local sy = p_menu:number_float('Front / Back', menu.type.scroll)
+        :fmt('%.2f', -15.0, 15.0, 0.05)
+        :tooltip('Front or back')
+
+    local sz = p_menu:number_float('Up / Down', menu.type.scroll)
+        :fmt('%.2f', -15.0, 15.0, 0.05)
+        :tooltip('Up or down')
+
+    --------------------------------------------------------------------
+    -- Rotation sliders
+    --------------------------------------------------------------------
+    p_menu:breaker('Rotation')
+
+    local sp = p_menu:number_float('Pitch', menu.type.scroll)
+        :fmt('%.1f', -360.0, 360.0, 1.0)
+        :tooltip('Tilt forward or back')
+
+    local srl = p_menu:number_float('Roll', menu.type.scroll)
+        :fmt('%.1f', -360.0, 360.0, 1.0)
+        :tooltip('Tilt left or right')
+
+    local sy_rot = p_menu:number_float('Yaw', menu.type.scroll)
+        :fmt('%.1f', -360.0, 360.0, 1.0)
+        :tooltip('Face left or right')
+
+    --------------------------------------------------------------------
+    -- Live update on slider change
+    --------------------------------------------------------------------
+    local function live_update()
         if not attached_vehicle then return end
         if attached_player_name ~= pname then return end
         pcall(do_attach, attached_vehicle,
-            offset.x, offset.y, offset.z,
-            offset.pitch, offset.roll, offset.yaw)
+            sx.value, sy.value, sz.value,
+            sp.value, srl.value, sy_rot.value)
     end
 
+    sx:event(menu.event.change, function() live_update() end)
+    sy:event(menu.event.change, function() live_update() end)
+    sz:event(menu.event.change, function() live_update() end)
+    sp:event(menu.event.change, function() live_update() end)
+    srl:event(menu.event.change, function() live_update() end)
+    sy_rot:event(menu.event.change, function() live_update() end)
+
     --------------------------------------------------------------------
-    -- PRESETS
+    -- Presets
     --------------------------------------------------------------------
+    p_menu:breaker('Presets')
+
     for _, preset in ipairs(presets) do
         local btn = p_menu:button(preset[1])
         btn:tooltip('Attach at ' .. preset[1])
@@ -369,12 +402,12 @@ local function create_player_menu(pid, pname)
                 return
             end
 
-            offset.x = preset[2]
-            offset.y = preset[3]
-            offset.z = preset[4]
-            offset.pitch = preset[5]
-            offset.roll = preset[6]
-            offset.yaw = preset[7]
+            sx.value = preset[2]
+            sy.value = preset[3]
+            sz.value = preset[4]
+            sp.value = preset[5]
+            srl.value = preset[6]
+            sy_rot.value = preset[7]
 
             if do_attach(veh, preset[2], preset[3], preset[4], preset[5], preset[6], preset[7]) then
                 attached_player_name = pname
@@ -384,10 +417,12 @@ local function create_player_menu(pid, pname)
     end
 
     --------------------------------------------------------------------
-    -- ATTACH button
+    -- Actions
     --------------------------------------------------------------------
+    p_menu:breaker('Actions')
+
     local attach_btn = p_menu:button('Attach')
-    attach_btn:tooltip('Attach with current offset values')
+    attach_btn:tooltip('Attach with current slider values')
     attach_btn:event(menu.event.click, function()
         local veh = get_player_vehicle(pid)
         if not veh then
@@ -395,15 +430,12 @@ local function create_player_menu(pid, pname)
             return
         end
 
-        if do_attach(veh, offset.x, offset.y, offset.z, offset.pitch, offset.roll, offset.yaw) then
+        if do_attach(veh, sx.value, sy.value, sz.value, sp.value, srl.value, sy_rot.value) then
             attached_player_name = pname
             safe_notify('Attached to ' .. pname)
         end
     end)
 
-    --------------------------------------------------------------------
-    -- DETACH button
-    --------------------------------------------------------------------
     local detach_btn2 = p_menu:button('Detach')
     detach_btn2:tooltip('Detach from this player')
     detach_btn2:event(menu.event.click, function()
@@ -415,72 +447,31 @@ local function create_player_menu(pid, pname)
         end
     end)
 
-    --------------------------------------------------------------------
-    -- DISABLE COLLISION toggle
-    --------------------------------------------------------------------
-    local col_toggle = p_menu:toggle('Disable Collision')
-    col_toggle:tooltip('Clip through the vehicle instead of colliding with it')
-    col_toggle:event(menu.event.change, function(val)
-        collision_disabled = val
-        if attached_vehicle and collision_disabled then
-            local entity = get_my_entity()
-            if entity then
-                call_native(N_SET_ENTITY_COMPLETELY_DISABLE_COLLISION, entity, 0, 0)
-            end
-            safe_notify('Collision disabled')
-        end
-    end)
-
-    --------------------------------------------------------------------
-    -- STEP SIZE toggle
-    --------------------------------------------------------------------
-    local step_btn = p_menu:button('Step: Fine (0.1)')
-    step_btn:tooltip('Click to cycle step size: Fine / Medium / Coarse')
-    step_btn:event(menu.event.click, function()
-        step_mode = (step_mode + 1) % 3
-        safe_notify('Step: ' .. step_names[step_mode + 1] .. ' | Rotation: ' .. rot_step_names[step_mode + 1])
-    end)
-
-    --------------------------------------------------------------------
-    -- POSITION CONTROLS — button-based +/- for each axis
-    --------------------------------------------------------------------
-    -- Helper to create a +/- pair for an axis
-    local function make_axis(axis_key, label_minus, label_plus, is_rotation)
-        local btn_minus = p_menu:button(label_minus)
-        btn_minus:event(menu.event.click, function()
-            local s = is_rotation and rot_step_sizes[step_mode + 1] or step_sizes[step_mode + 1]
-            offset[axis_key] = offset[axis_key] - s
-            reattach_if_active()
-            safe_notify(axis_key .. ': ' .. string.format('%.2f', offset[axis_key]))
-        end)
-
-        local btn_plus = p_menu:button(label_plus)
-        btn_plus:event(menu.event.click, function()
-            local s = is_rotation and rot_step_sizes[step_mode + 1] or step_sizes[step_mode + 1]
-            offset[axis_key] = offset[axis_key] + s
-            reattach_if_active()
-            safe_notify(axis_key .. ': ' .. string.format('%.2f', offset[axis_key]))
-        end)
-    end
-
-    make_axis('x',     '< Left',       'Right >',      false)
-    make_axis('y',     '< Back',       'Front >',      false)
-    make_axis('z',     '< Down',       'Up >',         false)
-    make_axis('pitch', '< Pitch Down', 'Pitch Up >',   true)
-    make_axis('roll',  '< Roll Left',  'Roll Right >', true)
-    make_axis('yaw',   '< Yaw Left',   'Yaw Right >',  true)
-
-    --------------------------------------------------------------------
-    -- RESET OFFSETS button
-    --------------------------------------------------------------------
-    local reset_btn = p_menu:button('Reset Offsets')
-    reset_btn:tooltip('Reset all position and rotation to 0')
+    local reset_btn = p_menu:button('Reset Sliders')
+    reset_btn:tooltip('Reset all position and rotation sliders to 0')
     reset_btn:event(menu.event.click, function()
-        offset.x = 0.0; offset.y = 0.0; offset.z = 0.0
-        offset.pitch = 0.0; offset.roll = 0.0; offset.yaw = 0.0
-        reattach_if_active()
-        safe_notify('Offsets reset to 0')
+        sx.value = 0.0
+        sy.value = 0.0
+        sz.value = 0.0
+        sp.value = 0.0
+        srl.value = 0.0
+        sy_rot.value = 0.0
+        live_update()
+        safe_notify('Sliders reset')
     end)
+
+    p_menu:toggle('Disable Collision')
+        :tooltip('Clip through the vehicle instead of colliding with it')
+        :event(menu.event.change, function(val)
+            collision_disabled = val
+            if attached_vehicle and collision_disabled then
+                local entity = get_my_entity()
+                if entity then
+                    call_native(N_SET_ENTITY_COMPLETELY_DISABLE_COLLISION, entity, 0, 0)
+                end
+                safe_notify('Collision disabled')
+            end
+        end)
 
     return true
 end
