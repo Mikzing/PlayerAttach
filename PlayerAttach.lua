@@ -18,7 +18,7 @@
 --
 
 local SCRIPT_NAME = 'Player Attach'
-local SCRIPT_VERSION = '3.1.0'
+local SCRIPT_VERSION = '3.2.0'
 
 -----------------------------------------------------------------------
 -- Permission check
@@ -311,7 +311,19 @@ local function safe_delete_menu(m)
 end
 
 -----------------------------------------------------------------------
--- Quick detach at top
+-- Global offset (shared — only one attachment at a time)
+-----------------------------------------------------------------------
+local offset = { x = 0.0, y = 0.0, z = 0.0, pitch = 0.0, roll = 0.0, yaw = 0.0 }
+
+local function global_reattach()
+    if not attached_vehicle then return end
+    pcall(do_attach, attached_vehicle,
+        offset.x, offset.y, offset.z,
+        offset.pitch, offset.roll, offset.yaw)
+end
+
+-----------------------------------------------------------------------
+-- Quick detach at top of root menu
 -----------------------------------------------------------------------
 local detach_btn = root:button('Detach')
 detach_btn:tooltip('Quick detach from any vehicle you are attached to')
@@ -326,7 +338,74 @@ detach_btn:event(menu.event.click, function()
 end)
 
 -----------------------------------------------------------------------
--- Create submenu for one player with full controls.
+-- Adjust Position — on root menu so it always shows
+-----------------------------------------------------------------------
+local pos_menu = root:submenu('Adjust Position')
+
+local step_sizes = { 0.05, 0.1, 0.25, 0.5, 1.0 }
+local step_names = { '0.05', '0.1', '0.25', '0.5', '1.0' }
+local rot_steps  = { 1.0, 5.0, 15.0, 30.0, 45.0 }
+local rot_names  = { '1', '5', '15', '30', '45' }
+local step_idx = 2
+
+local step_btn = pos_menu:button('Cycle Step Size')
+step_btn:tooltip('Click to cycle: 0.05 / 0.1 / 0.25 / 0.5 / 1.0')
+step_btn:event(menu.event.click, function()
+    step_idx = step_idx % 5 + 1
+    safe_notify('Step: ' .. step_names[step_idx] .. ' Rot: ' .. rot_names[step_idx])
+end)
+
+local function make_axis(key, label_minus, label_plus, is_rot)
+    local bm = pos_menu:button(label_minus)
+    bm:event(menu.event.click, function()
+        local s = is_rot and rot_steps[step_idx] or step_sizes[step_idx]
+        offset[key] = offset[key] - s
+        global_reattach()
+        safe_notify(key .. ' = ' .. string.format('%.2f', offset[key]))
+    end)
+    local bp = pos_menu:button(label_plus)
+    bp:event(menu.event.click, function()
+        local s = is_rot and rot_steps[step_idx] or step_sizes[step_idx]
+        offset[key] = offset[key] + s
+        global_reattach()
+        safe_notify(key .. ' = ' .. string.format('%.2f', offset[key]))
+    end)
+end
+
+make_axis('x',     'Left',       'Right',      false)
+make_axis('y',     'Back',       'Front',      false)
+make_axis('z',     'Down',       'Up',         false)
+make_axis('pitch', 'Pitch Down', 'Pitch Up',   true)
+make_axis('roll',  'Roll Left',  'Roll Right', true)
+make_axis('yaw',   'Yaw Left',   'Yaw Right',  true)
+
+local reset_btn = pos_menu:button('Reset Position')
+reset_btn:tooltip('Reset all offsets to 0')
+reset_btn:event(menu.event.click, function()
+    offset.x = 0.0; offset.y = 0.0; offset.z = 0.0
+    offset.pitch = 0.0; offset.roll = 0.0; offset.yaw = 0.0
+    global_reattach()
+    safe_notify('Position reset to 0')
+end)
+
+-----------------------------------------------------------------------
+-- Disable Collision — on root menu
+-----------------------------------------------------------------------
+local col_toggle = root:toggle('Disable Collision')
+col_toggle:tooltip('Clip through the vehicle instead of colliding with it')
+col_toggle:event(menu.event.change, function(val)
+    collision_disabled = val
+    if attached_vehicle and collision_disabled then
+        local entity = get_my_entity()
+        if entity then
+            call_native(N_SET_ENTITY_COMPLETELY_DISABLE_COLLISION, entity, 0, 0)
+        end
+        safe_notify('Collision disabled')
+    end
+end)
+
+-----------------------------------------------------------------------
+-- Create submenu for one player (presets + attach/detach only)
 -----------------------------------------------------------------------
 local function create_player_menu(pid, pname)
     local p_menu = root:submenu(pname)
@@ -335,24 +414,9 @@ local function create_player_menu(pid, pname)
     -- Track IMMEDIATELY — prevents duplicate submenus
     player_entries[pid] = { menu = p_menu, name = pname }
 
-    -- Current offset values
-    local offset = { x = 0.0, y = 0.0, z = 0.0, pitch = 0.0, roll = 0.0, yaw = 0.0 }
-
-    -- Reattach with current offsets (called by +/- buttons and presets)
-    local function reattach()
-        if not attached_vehicle then return end
-        if attached_player_name ~= pname then return end
-        pcall(do_attach, attached_vehicle,
-            offset.x, offset.y, offset.z,
-            offset.pitch, offset.roll, offset.yaw)
-    end
-
-    --------------------------------------------------------------------
-    -- PRESETS — inside a submenu to stay within item limit
-    --------------------------------------------------------------------
-    local preset_menu = p_menu:submenu('Presets')
+    -- Presets
     for _, preset in ipairs(presets) do
-        local btn = preset_menu:button(preset[1])
+        local btn = p_menu:button(preset[1])
         btn:tooltip('Attach at ' .. preset[1])
         btn:event(menu.event.click, function()
             local veh = get_player_vehicle(pid)
@@ -375,11 +439,9 @@ local function create_player_menu(pid, pname)
         end)
     end
 
-    --------------------------------------------------------------------
-    -- ATTACH
-    --------------------------------------------------------------------
+    -- Attach with current offset
     local attach_btn = p_menu:button('Attach')
-    attach_btn:tooltip('Attach with current position values')
+    attach_btn:tooltip('Attach with current Adjust Position values')
     attach_btn:event(menu.event.click, function()
         local veh = get_player_vehicle(pid)
         if not veh then
@@ -393,9 +455,7 @@ local function create_player_menu(pid, pname)
         end
     end)
 
-    --------------------------------------------------------------------
-    -- DETACH
-    --------------------------------------------------------------------
+    -- Detach
     local detach_btn2 = p_menu:button('Detach')
     detach_btn2:tooltip('Detach from this player')
     detach_btn2:event(menu.event.click, function()
@@ -405,73 +465,6 @@ local function create_player_menu(pid, pname)
         else
             safe_notify('Not attached to anything')
         end
-    end)
-
-    --------------------------------------------------------------------
-    -- DISABLE COLLISION
-    --------------------------------------------------------------------
-    local col_toggle = p_menu:toggle('Disable Collision')
-    col_toggle:tooltip('Clip through the vehicle instead of colliding with it')
-    col_toggle:event(menu.event.change, function(val)
-        collision_disabled = val
-        if attached_vehicle and collision_disabled then
-            local entity = get_my_entity()
-            if entity then
-                call_native(N_SET_ENTITY_COMPLETELY_DISABLE_COLLISION, entity, 0, 0)
-            end
-            safe_notify('Collision disabled')
-        end
-    end)
-
-    --------------------------------------------------------------------
-    -- ADJUST POSITION — submenu with +/- buttons for each axis
-    --------------------------------------------------------------------
-    local pos_menu = p_menu:submenu('Adjust Position')
-
-    local step_sizes = { 0.05, 0.1, 0.25, 0.5, 1.0 }
-    local step_names = { '0.05', '0.1', '0.25', '0.5', '1.0' }
-    local rot_steps  = { 1.0, 5.0, 15.0, 30.0, 45.0 }
-    local rot_names  = { '1', '5', '15', '30', '45' }
-    local step_idx = 2
-
-    local step_btn = pos_menu:button('Cycle Step Size')
-    step_btn:tooltip('Click to cycle: 0.05 / 0.1 / 0.25 / 0.5 / 1.0')
-    step_btn:event(menu.event.click, function()
-        step_idx = step_idx % 5 + 1
-        safe_notify('Step: ' .. step_names[step_idx] .. ' Rot: ' .. rot_names[step_idx])
-    end)
-
-    local function make_axis(key, label_minus, label_plus, is_rot)
-        local bm = pos_menu:button(label_minus)
-        bm:event(menu.event.click, function()
-            local s = is_rot and rot_steps[step_idx] or step_sizes[step_idx]
-            offset[key] = offset[key] - s
-            reattach()
-            safe_notify(key .. ' = ' .. string.format('%.2f', offset[key]))
-        end)
-        local bp = pos_menu:button(label_plus)
-        bp:event(menu.event.click, function()
-            local s = is_rot and rot_steps[step_idx] or step_sizes[step_idx]
-            offset[key] = offset[key] + s
-            reattach()
-            safe_notify(key .. ' = ' .. string.format('%.2f', offset[key]))
-        end)
-    end
-
-    make_axis('x',     'Left',       'Right',      false)
-    make_axis('y',     'Back',       'Front',      false)
-    make_axis('z',     'Down',       'Up',         false)
-    make_axis('pitch', 'Pitch Down', 'Pitch Up',   true)
-    make_axis('roll',  'Roll Left',  'Roll Right', true)
-    make_axis('yaw',   'Yaw Left',   'Yaw Right',  true)
-
-    local reset_btn = pos_menu:button('Reset Position')
-    reset_btn:tooltip('Reset all offsets to 0')
-    reset_btn:event(menu.event.click, function()
-        offset.x = 0.0; offset.y = 0.0; offset.z = 0.0
-        offset.pitch = 0.0; offset.roll = 0.0; offset.yaw = 0.0
-        reattach()
-        safe_notify('Position reset to 0')
     end)
 
     return true
@@ -489,7 +482,6 @@ end
 
 -----------------------------------------------------------------------
 -- Refresh: scan player list, add new, remove departed.
--- Only called from the refresh thread.
 -----------------------------------------------------------------------
 local function refresh_players()
     local ok, player_list = pcall(players.list)
@@ -505,7 +497,6 @@ local function refresh_players()
         if ok_id and id_val then my_id = id_val end
     end
 
-    -- Build set of current VALID players: pid -> name
     local current = {}
     for _, player in ipairs(player_list) do
         local p_ok, p_id, p_name = pcall(function()
@@ -519,7 +510,6 @@ local function refresh_players()
         end
     end
 
-    -- Remove entries for players no longer in session
     for pid, entry in pairs(player_entries) do
         if not current[pid] then
             if attached_player_name and entry.name == attached_player_name then
@@ -530,7 +520,6 @@ local function refresh_players()
         end
     end
 
-    -- Add new players (skip anyone already tracked)
     local added = 0
     for pid, pname in pairs(current) do
         if not player_entries[pid] then
@@ -547,14 +536,11 @@ local function refresh_players()
 end
 
 -----------------------------------------------------------------------
--- Cleanup thread — silently removes departed players every 5 seconds.
--- Does NOT add new players (no notification spam). Only removes stale.
+-- Cleanup thread
 -----------------------------------------------------------------------
 util.create_thread(function()
     while true do
         util.yield(5000)
-
-        -- Check each tracked player, remove if no longer valid
         for pid, entry in pairs(player_entries) do
             if not is_valid_player(pid) then
                 if attached_player_name and entry.name == attached_player_name then
@@ -568,8 +554,7 @@ util.create_thread(function()
 end)
 
 -----------------------------------------------------------------------
--- Refresh button — runs in a thread so util.yield is available
--- This is the ONLY way to ADD new players. No auto-add.
+-- Refresh button
 -----------------------------------------------------------------------
 local refresh_requested = false
 
