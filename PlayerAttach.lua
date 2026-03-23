@@ -18,7 +18,7 @@
 --
 
 local SCRIPT_NAME = 'Player Attach'
-local SCRIPT_VERSION = '3.3.0'
+local SCRIPT_VERSION = '3.4.0'
 
 -----------------------------------------------------------------------
 -- Permission check
@@ -338,52 +338,100 @@ detach_btn:event(menu.event.click, function()
 end)
 
 -----------------------------------------------------------------------
--- Adjust Position — on root menu so it always shows
+-- Adjust Position — sliders for free movement, buttons as fallback
 -----------------------------------------------------------------------
 local pos_menu = root:submenu('Adjust Position')
 
-local step_sizes = { 0.05, 0.1, 0.25, 0.5, 1.0 }
-local step_names = { '0.05', '0.1', '0.25', '0.5', '1.0' }
-local rot_steps  = { 1.0, 5.0, 15.0, 30.0, 45.0 }
-local rot_names  = { '1', '5', '15', '30', '45' }
-local step_idx = 2
+local use_sliders = false
 
-local step_btn = pos_menu:button('Cycle Step Size')
-step_btn:tooltip('Click to cycle: 0.05 / 0.1 / 0.25 / 0.5 / 1.0')
-step_btn:event(menu.event.click, function()
-    step_idx = step_idx % 5 + 1
-    safe_notify('Step: ' .. step_names[step_idx] .. ' Rot: ' .. rot_names[step_idx])
-end)
-
-local function make_axis(key, label_minus, label_plus, is_rot)
-    local bm = pos_menu:button(label_minus)
-    bm:event(menu.event.click, function()
-        local s = is_rot and rot_steps[step_idx] or step_sizes[step_idx]
-        offset[key] = offset[key] - s
-        global_reattach()
-        safe_notify(key .. ' = ' .. string.format('%.2f', offset[key]))
+-- Try to create sliders (number_float with scroll) for free movement
+local function try_create_slider(parent, label, key, min_val, max_val, step, fmt_str)
+    local ok, slider = pcall(function()
+        local s = parent:number_float(label, menu.type.scroll)
+        s:fmt(fmt_str, min_val, max_val, step)
+        s:event(menu.event.click, function(opt)
+            offset[key] = opt.value
+            global_reattach()
+        end)
+        return s
     end)
-    local bp = pos_menu:button(label_plus)
-    bp:event(menu.event.click, function()
-        local s = is_rot and rot_steps[step_idx] or step_sizes[step_idx]
-        offset[key] = offset[key] + s
-        global_reattach()
-        safe_notify(key .. ' = ' .. string.format('%.2f', offset[key]))
-    end)
+    if ok and slider then
+        return slider
+    end
+    return nil
 end
 
-make_axis('x',     'Left',       'Right',      false)
-make_axis('y',     'Back',       'Front',      false)
-make_axis('z',     'Down',       'Up',         false)
-make_axis('pitch', 'Pitch Down', 'Pitch Up',   true)
-make_axis('roll',  'Roll Left',  'Roll Right', true)
-make_axis('yaw',   'Yaw Left',   'Yaw Right',  true)
+-- Attempt slider creation for all axes
+local slider_x     = try_create_slider(pos_menu, 'Left / Right',  'x',     -10.0, 10.0,  0.10, '%.2f')
+local slider_y     = try_create_slider(pos_menu, 'Back / Front',  'y',     -10.0, 10.0,  0.10, '%.2f')
+local slider_z     = try_create_slider(pos_menu, 'Down / Up',     'z',     -10.0, 10.0,  0.10, '%.2f')
+local slider_pitch = try_create_slider(pos_menu, 'Pitch',         'pitch', -180.0, 180.0, 1.0,  '%.0f')
+local slider_roll  = try_create_slider(pos_menu, 'Roll',          'roll',  -180.0, 180.0, 1.0,  '%.0f')
+local slider_yaw   = try_create_slider(pos_menu, 'Yaw',           'yaw',   -180.0, 180.0, 1.0,  '%.0f')
+
+if slider_x and slider_y and slider_z then
+    use_sliders = true
+end
+
+-- Fallback: button-based controls if sliders failed
+if not use_sliders then
+    -- Clean up any partial sliders that did succeed
+    for _, s in ipairs({slider_x, slider_y, slider_z, slider_pitch, slider_roll, slider_yaw}) do
+        if s then pcall(function() s:delete() end) end
+    end
+
+    local step_sizes = { 0.05, 0.1, 0.25, 0.5, 1.0 }
+    local step_names = { '0.05', '0.1', '0.25', '0.5', '1.0' }
+    local rot_steps  = { 1.0, 5.0, 15.0, 30.0, 45.0 }
+    local rot_names  = { '1', '5', '15', '30', '45' }
+    local step_idx = 2
+
+    local step_btn = pos_menu:button('Cycle Step Size')
+    step_btn:tooltip('Click to cycle: 0.05 / 0.1 / 0.25 / 0.5 / 1.0')
+    step_btn:event(menu.event.click, function()
+        step_idx = step_idx % 5 + 1
+        safe_notify('Step: ' .. step_names[step_idx] .. ' Rot: ' .. rot_names[step_idx])
+    end)
+
+    local function make_axis(key, label_minus, label_plus, is_rot)
+        local bm = pos_menu:button(label_minus)
+        bm:event(menu.event.click, function()
+            local s = is_rot and rot_steps[step_idx] or step_sizes[step_idx]
+            offset[key] = offset[key] - s
+            global_reattach()
+            safe_notify(key .. ' = ' .. string.format('%.2f', offset[key]))
+        end)
+        local bp = pos_menu:button(label_plus)
+        bp:event(menu.event.click, function()
+            local s = is_rot and rot_steps[step_idx] or step_sizes[step_idx]
+            offset[key] = offset[key] + s
+            global_reattach()
+            safe_notify(key .. ' = ' .. string.format('%.2f', offset[key]))
+        end)
+    end
+
+    make_axis('x',     'Left',       'Right',      false)
+    make_axis('y',     'Back',       'Front',      false)
+    make_axis('z',     'Down',       'Up',         false)
+    make_axis('pitch', 'Pitch Down', 'Pitch Up',   true)
+    make_axis('roll',  'Roll Left',  'Roll Right', true)
+    make_axis('yaw',   'Yaw Left',   'Yaw Right',  true)
+end
 
 local reset_btn = pos_menu:button('Reset Position')
 reset_btn:tooltip('Reset all offsets to 0')
 reset_btn:event(menu.event.click, function()
     offset.x = 0.0; offset.y = 0.0; offset.z = 0.0
     offset.pitch = 0.0; offset.roll = 0.0; offset.yaw = 0.0
+    -- Sync slider values back if sliders are active
+    if use_sliders then
+        pcall(function() slider_x.value = 0.0 end)
+        pcall(function() slider_y.value = 0.0 end)
+        pcall(function() slider_z.value = 0.0 end)
+        pcall(function() slider_pitch.value = 0.0 end)
+        pcall(function() slider_roll.value = 0.0 end)
+        pcall(function() slider_yaw.value = 0.0 end)
+    end
     global_reattach()
     safe_notify('Position reset to 0')
 end)
@@ -433,6 +481,16 @@ local function create_player_menu(pid, pname)
             offset.pitch = preset[5]
             offset.roll = preset[6]
             offset.yaw = preset[7]
+
+            -- Sync slider values if sliders are active
+            if use_sliders then
+                pcall(function() slider_x.value = preset[2] end)
+                pcall(function() slider_y.value = preset[3] end)
+                pcall(function() slider_z.value = preset[4] end)
+                pcall(function() slider_pitch.value = preset[5] end)
+                pcall(function() slider_roll.value = preset[6] end)
+                pcall(function() slider_yaw.value = preset[7] end)
+            end
 
             if do_attach(veh, preset[2], preset[3], preset[4], preset[5], preset[6], preset[7]) then
                 attached_player_name = pname
@@ -576,4 +634,5 @@ util.create_thread(function()
     end
 end)
 
-safe_notify('v' .. SCRIPT_VERSION .. ' loaded — click Refresh Players to populate', { icon = notify.icon.info })
+local mode_str = use_sliders and 'sliders' or 'buttons'
+safe_notify('v' .. SCRIPT_VERSION .. ' loaded (' .. mode_str .. ') — click Refresh Players to populate', { icon = notify.icon.info })
