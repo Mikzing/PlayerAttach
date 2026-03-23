@@ -153,12 +153,6 @@ local function do_attach(veh, x, y, z, pitch, roll, yaw)
     end
 
     raw_attach(entity, veh, x, y, z, pitch, roll, yaw)
-
-    -- Verify it actually worked (vehicle may not be streamed in)
-    if not is_attached(entity) then
-        safe_notify('Failed — player may be too far away', { icon = notify.icon.hazard })
-        return false
-    end
     set_idle_anims(false)
 
     attached_vehicle     = veh
