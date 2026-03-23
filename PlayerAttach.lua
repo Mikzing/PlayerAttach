@@ -18,7 +18,7 @@
 --
 
 local SCRIPT_NAME = 'Player Attach'
-local SCRIPT_VERSION = '3.2.0'
+local SCRIPT_VERSION = '3.3.0'
 
 -----------------------------------------------------------------------
 -- Permission check
@@ -389,18 +389,20 @@ reset_btn:event(menu.event.click, function()
 end)
 
 -----------------------------------------------------------------------
--- Disable Collision — on root menu
+-- Disable Collision — button that toggles state manually
 -----------------------------------------------------------------------
-local col_toggle = root:toggle('Disable Collision')
-col_toggle:tooltip('Clip through the vehicle instead of colliding with it')
-col_toggle:event(menu.event.change, function(val)
-    collision_disabled = val
-    if attached_vehicle and collision_disabled then
+local col_btn = root:button('Collision: ON')
+col_btn:tooltip('Click to toggle collision on/off')
+col_btn:event(menu.event.click, function()
+    collision_disabled = not collision_disabled
+    if collision_disabled then
         local entity = get_my_entity()
         if entity then
             call_native(N_SET_ENTITY_COMPLETELY_DISABLE_COLLISION, entity, 0, 0)
         end
         safe_notify('Collision disabled')
+    else
+        safe_notify('Collision enabled')
     end
 end)
 
