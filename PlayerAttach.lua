@@ -13,12 +13,12 @@
 -- ┃              by Mikz                            ┃
 -- ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
 --
--- Player Attach v3.9.0 — Lexis Script
+-- Player Attach v4.0.0 — Lexis Script
 -- Attach yourself to any player's vehicle
 --
 
 local SCRIPT_NAME    = 'Player Attach'
-local SCRIPT_VERSION = '3.9.0'
+local SCRIPT_VERSION = '4.0.0'
 
 -- ─── Permission check ───────────────────────────────────────────────
 local perm_ok, perm_val = pcall(function()
@@ -114,37 +114,39 @@ local function set_idle_anims(enabled)
     call_native(N_SET_PED_CAN_PLAY_AMBIENT_BASE_ANIMS, ped, v)
 end
 
--- ─── Presets { name, tooltip, x, y, z, pitch, roll, yaw } ──────────
+-- ─── Presets { name, tooltip, x, y, z, pitch, yaw } ────────────────
 local presets = {
-    { 'Roof',         'Stand on top of the vehicle',             0.0,   0.0,  1.2,  0.0, 0.0,   0.0 },
-    { 'Hood',         'Stand on the front hood',                 0.0,   2.5,  0.8,  0.0, 0.0,   0.0 },
-    { 'Trunk',        'Stand on the back trunk, facing rear',    0.0,  -2.5,  0.8,  0.0, 0.0, 180.0 },
-    { 'Left Side',    'Hang off the left side, facing outward', -1.2,   0.0,  0.5,  0.0, 0.0, -90.0 },
-    { 'Right Side',   'Hang off the right side, facing outward', 1.2,   0.0,  0.5,  0.0, 0.0,  90.0 },
-    { 'Hanging Back', 'Cling to the rear bumper',                0.0,  -2.0,  0.2,  0.0, 0.0, 180.0 },
+    { 'Roof',         'Stand on top of the vehicle',             0.0,   0.0,  1.2,  0.0,   0.0 },
+    { 'Hood',         'Stand on the front hood',                 0.0,   2.5,  0.8,  0.0,   0.0 },
+    { 'Trunk',        'Stand on the back trunk, facing rear',    0.0,  -2.5,  0.8,  0.0, 180.0 },
+    { 'Left Side',    'Hang off the left side, facing outward', -1.2,   0.0,  0.5,  0.0, -90.0 },
+    { 'Right Side',   'Hang off the right side, facing outward', 1.2,   0.0,  0.5,  0.0,  90.0 },
+    { 'Hanging Back', 'Cling to the rear bumper',                0.0,  -2.0,  0.2,  0.0, 180.0 },
 }
 
 -- ─── Attachment state ───────────────────────────────────────────────
 local attached_vehicle     = nil
 local attached_player_name = nil
-local offset = { x = 0.0, y = 0.0, z = 0.0, pitch = 0.0, roll = 0.0, yaw = 0.0 }
+local offset = { x = 0.0, y = 0.0, z = 0.0, pitch = 0.0, yaw = 0.0 }
 
 local attach_state = {
     active  = false,
     vehicle = nil,
     x = 0.0, y = 0.0, z = 0.0,
-    pitch = 0.0, roll = 0.0, yaw = 0.0,
+    pitch = 0.0, yaw = 0.0,
 }
 
-local function raw_attach(entity, veh, x, y, z, pitch, roll, yaw)
+local function raw_attach(entity, veh, x, y, z, pitch, yaw)
+    -- Rotation order: xRot(pitch), yRot(roll=0), zRot(yaw)
+    -- useSoftPinning=0 so the game doesn't override our rotation
     call_native(N_ATTACH_ENTITY_TO_ENTITY,
         entity, veh, 0,
         x + 0.0, y + 0.0, z + 0.0,
-        pitch + 0.0, roll + 0.0, yaw + 0.0,
-        0, 1, 1, 0, 2, 1)
+        pitch + 0.0, 0.0, yaw + 0.0,
+        0, 1, 0, 0, 2, 1)
 end
 
-local function do_attach(veh, x, y, z, pitch, roll, yaw)
+local function do_attach(veh, x, y, z, pitch, yaw)
     local entity = get_my_entity()
     if not entity then safe_notify('Could not get your entity'); return false end
 
@@ -152,14 +154,14 @@ local function do_attach(veh, x, y, z, pitch, roll, yaw)
         call_native(N_DETACH_ENTITY, entity, 1, 1)
     end
 
-    raw_attach(entity, veh, x, y, z, pitch, roll, yaw)
+    raw_attach(entity, veh, x, y, z, pitch, yaw)
     set_idle_anims(false)
 
     attached_vehicle     = veh
     attach_state.active  = true
     attach_state.vehicle = veh
     attach_state.x, attach_state.y, attach_state.z = x, y, z
-    attach_state.pitch, attach_state.roll, attach_state.yaw = pitch, roll, yaw
+    attach_state.pitch, attach_state.yaw = pitch, yaw
     return true
 end
 
@@ -181,7 +183,7 @@ local function reattach()
     if not attached_vehicle then return end
     pcall(do_attach, attached_vehicle,
         offset.x, offset.y, offset.z,
-        offset.pitch, offset.roll, offset.yaw)
+        offset.pitch, offset.yaw)
 end
 
 -- ─── Re-attach thread ──────────────────────────────────────────────
@@ -216,7 +218,7 @@ util.create_thread(function()
         if not is_attached(entity) then
             raw_attach(entity, attach_state.vehicle,
                 attach_state.x, attach_state.y, attach_state.z,
-                attach_state.pitch, attach_state.roll, attach_state.yaw)
+                attach_state.pitch, attach_state.yaw)
             set_idle_anims(false)
         end
 
@@ -249,7 +251,6 @@ local function sync_sliders(entry)
     pcall(function() sl.y.value     = offset.y end)
     pcall(function() sl.z.value     = offset.z end)
     pcall(function() sl.pitch.value = offset.pitch end)
-    pcall(function() sl.roll.value  = offset.roll end)
     pcall(function() sl.yaw.value   = offset.yaw end)
 end
 
@@ -258,11 +259,10 @@ local function build_position_controls(parent)
     -- Try sliders first
     local sliders = {}
     local slider_defs = {
-        { 'X  Left / Right', 'x',     -10.0,  10.0, 0.10, '%.2f', 'Move left (-) or right (+)' },
-        { 'Y  Back / Front', 'y',     -10.0,  10.0, 0.10, '%.2f', 'Move backward (-) or forward (+)' },
-        { 'Z  Down / Up',    'z',     -10.0,  10.0, 0.10, '%.2f', 'Move down (-) or up (+)' },
+        { 'X  Left / Right', 'x',     -10.0,  10.0, 0.05, '%.2f', 'Move left (-) or right (+)' },
+        { 'Y  Back / Front', 'y',     -10.0,  10.0, 0.05, '%.2f', 'Move backward (-) or forward (+)' },
+        { 'Z  Down / Up',    'z',     -10.0,  10.0, 0.05, '%.2f', 'Move down (-) or up (+)' },
         { 'Pitch',           'pitch', -180.0, 180.0, 1.0, '%.0f', 'Tilt forward/backward (nod)' },
-        { 'Roll',            'roll',  -180.0, 180.0, 1.0, '%.0f', 'Tilt sideways (lean)' },
         { 'Yaw',             'yaw',   -180.0, 180.0, 1.0, '%.0f', 'Rotate left/right (turn)' },
     }
 
@@ -291,8 +291,8 @@ local function build_position_controls(parent)
         rst:tooltip('Reset all offsets back to 0')
         rst:event(menu.event.click, function()
             offset.x, offset.y, offset.z = 0.0, 0.0, 0.0
-            offset.pitch, offset.roll, offset.yaw = 0.0, 0.0, 0.0
-            for _, key in ipairs({ 'x', 'y', 'z', 'pitch', 'roll', 'yaw' }) do
+            offset.pitch, offset.yaw = 0.0, 0.0
+            for _, key in ipairs({ 'x', 'y', 'z', 'pitch', 'yaw' }) do
                 if sliders[key] then pcall(function() sliders[key].value = 0.0 end) end
             end
             reattach()
@@ -306,15 +306,15 @@ local function build_position_controls(parent)
         pcall(function() s:delete() end)
     end
 
-    -- Button-based fallback
-    local step_sizes = { 0.05, 0.1, 0.25, 0.5, 1.0 }
-    local step_names = { '0.05', '0.1', '0.25', '0.5', '1.0' }
-    local rot_steps  = { 1.0, 5.0, 15.0, 30.0, 45.0 }
-    local rot_names  = { '1', '5', '15', '30', '45' }
-    local step_idx   = 2
+    -- Button-based fallback (finer default steps)
+    local step_sizes = { 0.01, 0.025, 0.05, 0.1, 0.25 }
+    local step_names = { '0.01', '0.025', '0.05', '0.1', '0.25' }
+    local rot_steps  = { 0.5, 1.0, 5.0, 15.0, 30.0 }
+    local rot_names  = { '0.5', '1', '5', '15', '30' }
+    local step_idx   = 3
 
-    local cyc = parent:button('Cycle Step Size [0.1]')
-    cyc:tooltip('Click to cycle: 0.05 / 0.1 / 0.25 / 0.5 / 1.0')
+    local cyc = parent:button('Cycle Step Size [0.05]')
+    cyc:tooltip('Click to cycle: 0.01 / 0.025 / 0.05 / 0.1 / 0.25')
     cyc:event(menu.event.click, function()
         step_idx = step_idx % 5 + 1
         pcall(function() cyc:name('Cycle Step Size [' .. step_names[step_idx] .. ']') end)
@@ -326,7 +326,6 @@ local function build_position_controls(parent)
         { 'y',     '< Back',      'Front >',     false, 'Move backward',      'Move forward' },
         { 'z',     '< Down',      'Up >',        false, 'Move down',          'Move up' },
         { 'pitch', '< Pitch Down','Pitch Up >',  true,  'Tilt forward',       'Tilt backward' },
-        { 'roll',  '< Roll Left', 'Roll Right >', true,  'Roll to the left',   'Roll to the right' },
         { 'yaw',   '< Yaw Left',  'Yaw Right >', true,  'Turn left',          'Turn right' },
     }
     for _, a in ipairs(axes) do
@@ -353,7 +352,7 @@ local function build_position_controls(parent)
     rst:tooltip('Reset all offsets back to 0')
     rst:event(menu.event.click, function()
         offset.x, offset.y, offset.z = 0.0, 0.0, 0.0
-        offset.pitch, offset.roll, offset.yaw = 0.0, 0.0, 0.0
+        offset.pitch, offset.yaw = 0.0, 0.0
         reattach()
         safe_notify('Position reset')
     end)
@@ -375,7 +374,7 @@ local function create_player_menu(pid, pname)
     att:event(menu.event.click, function()
         local veh = get_player_vehicle(pid)
         if not veh then safe_notify(pname .. ' is not in a vehicle'); return end
-        if do_attach(veh, offset.x, offset.y, offset.z, offset.pitch, offset.roll, offset.yaw) then
+        if do_attach(veh, offset.x, offset.y, offset.z, offset.pitch, offset.yaw) then
             attached_player_name = pname
             safe_notify('Attached to ' .. pname)
         end
@@ -405,10 +404,10 @@ local function create_player_menu(pid, pname)
                 if not veh then safe_notify(pname .. ' is not in a vehicle'); return end
 
                 offset.x, offset.y, offset.z = p[3], p[4], p[5]
-                offset.pitch, offset.roll, offset.yaw = p[6], p[7], p[8]
+                offset.pitch, offset.yaw = p[6], p[7]
                 sync_sliders(entry)
 
-                if do_attach(veh, p[3], p[4], p[5], p[6], p[7], p[8]) then
+                if do_attach(veh, p[3], p[4], p[5], p[6], p[7]) then
                     attached_player_name = pname
                     safe_notify('Attached to ' .. pname .. ' (' .. p[1] .. ')')
                 end
