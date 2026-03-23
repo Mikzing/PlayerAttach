@@ -138,12 +138,13 @@ local attach_state = {
 
 local function raw_attach(entity, veh, x, y, z, pitch, yaw)
     -- Rotation order: xRot(pitch), yRot(roll=0), zRot(yaw)
-    -- useSoftPinning=0 so the game doesn't override our rotation
+    -- fixedRot=0 so rotation offsets are relative to the vehicle (pitch works)
+    -- doInitialWarp=1 so position & rotation are applied immediately
     call_native(N_ATTACH_ENTITY_TO_ENTITY,
         entity, veh, 0,
         x + 0.0, y + 0.0, z + 0.0,
         pitch + 0.0, 0.0, yaw + 0.0,
-        0, 1, 0, 0, 2, 1)
+        0, 1, 1, 0, 2, 0)
 end
 
 local function do_attach(veh, x, y, z, pitch, yaw)
@@ -186,6 +187,9 @@ local function reattach()
         offset.x, offset.y, offset.z,
         offset.pitch, offset.yaw)
 end
+
+-- ─── Player tracking (forward declaration) ─────────────────────────
+local player_entries = {}  -- pid → { menu, name, sliders }
 
 -- ─── Re-attach thread ──────────────────────────────────────────────
 util.create_thread(function()
@@ -235,9 +239,7 @@ if not root then
     return
 end
 
--- ─── Player tracking ────────────────────────────────────────────────
-local player_entries = {}  -- pid → { menu, name, sliders }
-
+-- ─── Player tracking (continued) ────────────────────────────────────
 local function safe_delete_menu(m)
     if not m then return end
     local ok = pcall(function() m:delete() end)
@@ -430,9 +432,12 @@ local function remove_player(pid)
     player_entries[pid] = nil
 end
 
-local function refresh_players()
+local function refresh_players(silent)
     local ok, player_list = pcall(players.list)
-    if not ok or not player_list then safe_notify('Could not get player list'); return end
+    if not ok or not player_list then
+        if not silent then safe_notify('Could not get player list') end
+        return
+    end
 
     local ok_me, my = pcall(players.me)
     local my_id = -1
@@ -471,20 +476,25 @@ local function refresh_players()
     end
 
     -- Add new players
+    local added = 0
     for _, p in ipairs(player_list) do
         local p_ok, p_id, p_name = pcall(function() return p.id, p.name end)
         if p_ok and p_id and p_id ~= my_id and p_name then
             local name = tostring(p_name)
             if #name > 0 and not player_entries[p_id] and not existing_names[name] and player_has_ped(p_id) then
-                pcall(create_player_menu, p_id, name)
+                if pcall(create_player_menu, p_id, name) then
+                    added = added + 1
+                end
                 existing_names[name] = true
             end
         end
     end
 
-    local total = 0
-    for _ in pairs(player_entries) do total = total + 1 end
-    safe_notify('Players: ' .. total)
+    if not silent then
+        local total = 0
+        for _ in pairs(player_entries) do total = total + 1 end
+        safe_notify('Players: ' .. total)
+    end
 end
 
 -- ─── Quick Detach ───────────────────────────────────────────────────
@@ -510,53 +520,21 @@ util.create_thread(function()
         util.yield(250)
         if refresh_requested then
             refresh_requested = false
-            pcall(refresh_players)
+            pcall(refresh_players, false)
         end
     end
 end)
 
--- ─── Cleanup thread ────────────────────────────────────────────────
--- Checks the live player list every 3 seconds and removes anyone who left
+-- ─── Auto-scan thread ──────────────────────────────────────────────
+-- Every 3 seconds: remove departed players AND add newly joined players
 util.create_thread(function()
+    -- Small initial delay so the menu is fully built
+    util.yield(1000)
+
     while true do
+        -- Run the full refresh silently (adds new + removes departed)
+        pcall(refresh_players, true)
         util.yield(3000)
-
-        -- Get the authoritative session list
-        local ok, player_list = pcall(players.list)
-        if not ok or not player_list then goto skip end
-
-        do
-            local ok_me, my = pcall(players.me)
-            local my_id = -1
-            if ok_me and my then
-                local ok_id, v = pcall(function() return my.id end)
-                if ok_id and v then my_id = v end
-            end
-
-            -- Build set of IDs currently in session
-            local session_ids = {}
-            for _, p in ipairs(player_list) do
-                local p_ok, p_id = pcall(function() return p.id end)
-                if p_ok and p_id and p_id ~= my_id then session_ids[p_id] = true end
-            end
-
-            -- Remove anyone no longer in the session
-            local to_remove = {}
-            for pid, entry in pairs(player_entries) do
-                if not session_ids[pid] then
-                    to_remove[#to_remove + 1] = pid
-                    if attached_player_name and entry.name == attached_player_name then
-                        do_detach()
-                        safe_notify(entry.name .. ' left — detached', { icon = notify.icon.hazard })
-                    end
-                end
-            end
-            for _, pid in ipairs(to_remove) do
-                remove_player(pid)
-            end
-        end
-
-        ::skip::
     end
 end)
 
