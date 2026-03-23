@@ -18,7 +18,7 @@
 --
 
 local SCRIPT_NAME = 'Player Attach'
-local SCRIPT_VERSION = '1.1.0'
+local SCRIPT_VERSION = '1.2.0'
 
 -----------------------------------------------------------------------
 -- Permission check
@@ -38,6 +38,7 @@ local N_IS_ENTITY_ATTACHED                     = 0xB346476EF1A64897
 local N_IS_ENTITY_ATTACHED_TO_ENTITY           = 0xEFBE71898A993728
 local N_SET_ENTITY_COMPLETELY_DISABLE_COLLISION = 0x1A9205C1B9EE827F
 local N_DOES_ENTITY_EXIST                      = 0x7239B21A38F536BA
+local N_SET_ENTITY_INVINCIBLE                  = 0x3882114BDE571AD4
 
 -----------------------------------------------------------------------
 -- State
@@ -46,15 +47,28 @@ local attached_vehicle = nil
 local attached_player_name = nil
 local collision_disabled = false
 
+-- Current attachment parameters (stored for re-attach loop)
+local attach_params = {
+    active = false,
+    vehicle = nil,
+    x = 0.0,
+    y = 0.0,
+    z = 0.0,
+    pitch = 0.0,
+    roll = 0.0,
+    yaw = 0.0,
+}
+
 -----------------------------------------------------------------------
--- Preset positions
+-- Preset positions { name, x, y, z, pitch, roll, yaw }
 -----------------------------------------------------------------------
 local presets = {
-    { 'Roof',        0.0,   0.0,  1.2,   0.0 },
-    { 'Hood',        0.0,   2.5,  0.8,   0.0 },
-    { 'Trunk',       0.0,  -2.5,  0.8, 180.0 },
-    { 'Left Side',  -1.2,   0.0,  0.5, 270.0 },
-    { 'Right Side',  1.2,   0.0,  0.5,  90.0 },
+    { 'Roof',        0.0,   0.0,  1.2,  0.0, 0.0,   0.0 },
+    { 'Hood',        0.0,   2.5,  0.8,  0.0, 0.0,   0.0 },
+    { 'Trunk',       0.0,  -2.5,  0.8,  0.0, 0.0, 180.0 },
+    { 'Left Side',  -1.2,   0.0,  0.5,  0.0, 0.0, 270.0 },
+    { 'Right Side',  1.2,   0.0,  0.5,  0.0, 0.0,  90.0 },
+    { 'Hanging Back', 0.0, -2.0,  0.2, 0.0, 0.0, 180.0 },
 }
 
 -----------------------------------------------------------------------
@@ -95,10 +109,38 @@ local function get_my_entity()
     return nil
 end
 
+local function is_entity_attached(entity)
+    if not entity then return false end
+    local result = safe_call(N_IS_ENTITY_ATTACHED, entity)
+    if result then
+        return result.bool
+    end
+    return false
+end
+
+-----------------------------------------------------------------------
+-- Core attach (raw, no notifications)
+-----------------------------------------------------------------------
+local function raw_attach(entity, target_vehicle, x, y, z, pitch, roll, yaw)
+    safe_call(N_ATTACH_ENTITY_TO_ENTITY,
+        entity,
+        target_vehicle,
+        0,                  -- boneIndex: 0 = center
+        x, y, z,            -- position offset
+        pitch, roll, yaw,   -- rotation offset (all 3 axes)
+        1,                  -- p9
+        0,                  -- useSoftPinning: 0 = won't detach
+        1,                  -- collision
+        0,                  -- isPed
+        0,                  -- rotationOrder
+        1                   -- syncRot
+    )
+end
+
 -----------------------------------------------------------------------
 -- Core functions
 -----------------------------------------------------------------------
-local function do_attach(target_vehicle, x, y, z, rot)
+local function do_attach(target_vehicle, x, y, z, pitch, roll, yaw)
     local entity = get_my_entity()
     if not entity then
         notify.push(SCRIPT_NAME, 'Could not get your entity')
@@ -111,28 +153,23 @@ local function do_attach(target_vehicle, x, y, z, rot)
     end
 
     -- Detach first if already attached (for live repositioning)
-    local check = safe_call(N_IS_ENTITY_ATTACHED_TO_ENTITY, entity, target_vehicle)
-    if check and check.bool then
+    if is_entity_attached(entity) then
         safe_call(N_DETACH_ENTITY, entity, 1, 1)
     end
 
-    -- Attach to the target vehicle center (bone 0)
-    -- GTA BOOL params are integers: 1 = true, 0 = false
-    safe_call(N_ATTACH_ENTITY_TO_ENTITY,
-        entity,             -- entity1: our ped or vehicle
-        target_vehicle,     -- entity2: their vehicle
-        0,                  -- boneIndex: 0 = center
-        x, y, z,            -- position offset (local coords)
-        0.0, 0.0, rot,      -- rotation offset (only Z exposed)
-        1,                  -- p9
-        0,                  -- useSoftPinning: 0 = won't detach
-        1,                  -- collision: 1 = keep collision
-        0,                  -- isPed
-        0,                  -- rotationOrder
-        1                   -- syncRot
-    )
+    -- Attach
+    raw_attach(entity, target_vehicle, x, y, z, pitch, roll, yaw)
 
+    -- Store state
     attached_vehicle = target_vehicle
+    attach_params.active = true
+    attach_params.vehicle = target_vehicle
+    attach_params.x = x
+    attach_params.y = y
+    attach_params.z = z
+    attach_params.pitch = pitch
+    attach_params.roll = roll
+    attach_params.yaw = yaw
 
     if collision_disabled then
         safe_call(N_SET_ENTITY_COMPLETELY_DISABLE_COLLISION, entity, 0, 0)
@@ -142,21 +179,57 @@ local function do_attach(target_vehicle, x, y, z, rot)
 end
 
 local function do_detach()
-    local entity = get_my_entity()
-    if not entity then
-        attached_vehicle = nil
-        attached_player_name = nil
-        return
-    end
+    -- Stop the re-attach loop from fighting us
+    attach_params.active = false
+    attach_params.vehicle = nil
 
-    local check = safe_call(N_IS_ENTITY_ATTACHED, entity)
-    if check and check.bool then
+    local entity = get_my_entity()
+    if entity and is_entity_attached(entity) then
         safe_call(N_DETACH_ENTITY, entity, 1, 1)
     end
 
     attached_vehicle = nil
     attached_player_name = nil
 end
+
+-----------------------------------------------------------------------
+-- Persistent re-attach thread
+-- Keeps you attached even when animations, ragdoll, etc try to detach
+-----------------------------------------------------------------------
+util.create_thread(function()
+    while true do
+        if attach_params.active and attach_params.vehicle then
+            local entity = get_my_entity()
+            if entity and entity_exists(attach_params.vehicle) then
+                if not is_entity_attached(entity) then
+                    -- We got detached (animation, ragdoll, etc) - reattach
+                    raw_attach(
+                        entity,
+                        attach_params.vehicle,
+                        attach_params.x,
+                        attach_params.y,
+                        attach_params.z,
+                        attach_params.pitch,
+                        attach_params.roll,
+                        attach_params.yaw
+                    )
+
+                    if collision_disabled then
+                        safe_call(N_SET_ENTITY_COMPLETELY_DISABLE_COLLISION, entity, 0, 0)
+                    end
+                end
+            elseif attach_params.vehicle and not entity_exists(attach_params.vehicle) then
+                -- Vehicle is gone, clean up
+                attach_params.active = false
+                attach_params.vehicle = nil
+                attached_vehicle = nil
+                attached_player_name = nil
+                notify.push(SCRIPT_NAME, 'Vehicle no longer exists, detached', { icon = notify.icon.hazard })
+            end
+        end
+        util.yield()
+    end
+end)
 
 -----------------------------------------------------------------------
 -- Menu setup
@@ -205,48 +278,53 @@ local function add_player_menu(player)
     --------------------------------------------------------------------
     -- Position sliders
     --------------------------------------------------------------------
-    p_menu:breaker('Position Offset')
+    p_menu:breaker('Position')
 
     local sx = p_menu:number_float('Left / Right', menu.type.scroll)
-        :fmt('%.2f', -10.0, 10.0, 0.10)
+        :fmt('%.2f', -15.0, 15.0, 0.05)
         :tooltip('- Left / + Right')
 
     local sy = p_menu:number_float('Back / Forward', menu.type.scroll)
-        :fmt('%.2f', -10.0, 10.0, 0.10)
+        :fmt('%.2f', -15.0, 15.0, 0.05)
         :tooltip('- Backward / + Forward')
 
     local sz = p_menu:number_float('Down / Up', menu.type.scroll)
-        :fmt('%.2f', -10.0, 10.0, 0.10)
+        :fmt('%.2f', -15.0, 15.0, 0.05)
         :tooltip('- Down / + Up')
 
-    local sr = p_menu:number_float('Rotation', menu.type.scroll)
-        :fmt('%.0f', 0.0, 359.0, 1.0)
-        :tooltip('Rotate your character (degrees)')
+    --------------------------------------------------------------------
+    -- Rotation sliders (Pitch, Roll, Yaw)
+    --------------------------------------------------------------------
+    p_menu:breaker('Rotation')
 
-    -- Live update sliders when already attached to this player
-    sx:event(menu.event.click, function(opt)
-        if attached_vehicle and attached_player_name == pname then
-            do_attach(attached_vehicle, opt.value, sy.value, sz.value, sr.value)
-        end
-    end)
+    local sp = p_menu:number_float('Pitch', menu.type.scroll)
+        :fmt('%.1f', -180.0, 180.0, 1.0)
+        :tooltip('Tilt forward / backward')
 
-    sy:event(menu.event.click, function(opt)
-        if attached_vehicle and attached_player_name == pname then
-            do_attach(attached_vehicle, sx.value, opt.value, sz.value, sr.value)
-        end
-    end)
+    local srl = p_menu:number_float('Roll', menu.type.scroll)
+        :fmt('%.1f', -180.0, 180.0, 1.0)
+        :tooltip('Tilt left / right')
 
-    sz:event(menu.event.click, function(opt)
-        if attached_vehicle and attached_player_name == pname then
-            do_attach(attached_vehicle, sx.value, sy.value, opt.value, sr.value)
-        end
-    end)
+    local sy_rot = p_menu:number_float('Yaw', menu.type.scroll)
+        :fmt('%.1f', -180.0, 180.0, 1.0)
+        :tooltip('Turn left / right (face direction)')
 
-    sr:event(menu.event.click, function(opt)
+    --------------------------------------------------------------------
+    -- Helper to get all current values and re-attach
+    --------------------------------------------------------------------
+    local function live_update()
         if attached_vehicle and attached_player_name == pname then
-            do_attach(attached_vehicle, sx.value, sy.value, sz.value, opt.value)
+            do_attach(attached_vehicle, sx.value, sy.value, sz.value, sp.value, srl.value, sy_rot.value)
         end
-    end)
+    end
+
+    -- Live update on any slider change
+    sx:event(menu.event.click, function() live_update() end)
+    sy:event(menu.event.click, function() live_update() end)
+    sz:event(menu.event.click, function() live_update() end)
+    sp:event(menu.event.click, function() live_update() end)
+    srl:event(menu.event.click, function() live_update() end)
+    sy_rot:event(menu.event.click, function() live_update() end)
 
     --------------------------------------------------------------------
     -- Presets
@@ -270,9 +348,11 @@ local function add_player_menu(player)
                 sx.value = preset[2]
                 sy.value = preset[3]
                 sz.value = preset[4]
-                sr.value = preset[5]
+                sp.value = preset[5]
+                srl.value = preset[6]
+                sy_rot.value = preset[7]
 
-                if do_attach(target.vehicle, preset[2], preset[3], preset[4], preset[5]) then
+                if do_attach(target.vehicle, preset[2], preset[3], preset[4], preset[5], preset[6], preset[7]) then
                     attached_player_name = target.name
                     notify.push(SCRIPT_NAME, 'Attached to ' .. target.name .. ' (' .. preset[1] .. ')')
                 end
@@ -301,7 +381,7 @@ local function add_player_menu(player)
                 return
             end
 
-            if do_attach(target.vehicle, sx.value, sy.value, sz.value, sr.value) then
+            if do_attach(target.vehicle, sx.value, sy.value, sz.value, sp.value, srl.value, sy_rot.value) then
                 attached_player_name = target.name
                 notify.push(SCRIPT_NAME, 'Attached to ' .. target.name)
             end
@@ -316,6 +396,19 @@ local function add_player_menu(player)
             else
                 notify.push(SCRIPT_NAME, 'Not attached to anything')
             end
+        end)
+
+    p_menu:button('Reset Sliders')
+        :tooltip('Reset all position and rotation sliders to 0')
+        :event(menu.event.click, function()
+            sx.value = 0.0
+            sy.value = 0.0
+            sz.value = 0.0
+            sp.value = 0.0
+            srl.value = 0.0
+            sy_rot.value = 0.0
+            live_update()
+            notify.push(SCRIPT_NAME, 'Sliders reset')
         end)
 
     p_menu:toggle('Disable Collision')
