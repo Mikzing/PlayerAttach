@@ -18,7 +18,7 @@
 --
 
 local SCRIPT_NAME = 'Player Attach'
-local SCRIPT_VERSION = '2.5.0'
+local SCRIPT_VERSION = '2.6.0'
 
 -----------------------------------------------------------------------
 -- Permission check
@@ -335,8 +335,8 @@ local function create_player_menu(pid, pname)
     -- Track IMMEDIATELY — prevents duplicate submenus
     player_entries[pid] = { menu = p_menu, name = pname }
 
-    -- Current offset values
-    local offset = { x = 0.0, y = 0.0, z = 0.0, pitch = 0.0, roll = 0.0, yaw = 0.0 }
+    -- Slider references (set later after buttons)
+    local sx, sy, sz, sp, srl, sy_rot
 
     --------------------------------------------------------------------
     -- PRESETS — always created first (buttons work)
@@ -351,12 +351,13 @@ local function create_player_menu(pid, pname)
                 return
             end
 
-            offset.x = preset[2]
-            offset.y = preset[3]
-            offset.z = preset[4]
-            offset.pitch = preset[5]
-            offset.roll = preset[6]
-            offset.yaw = preset[7]
+            -- Update sliders if they exist
+            if sx then sx.value = preset[2] end
+            if sy then sy.value = preset[3] end
+            if sz then sz.value = preset[4] end
+            if sp then sp.value = preset[5] end
+            if srl then srl.value = preset[6] end
+            if sy_rot then sy_rot.value = preset[7] end
 
             if do_attach(veh, preset[2], preset[3], preset[4], preset[5], preset[6], preset[7]) then
                 attached_player_name = pname
@@ -369,7 +370,7 @@ local function create_player_menu(pid, pname)
     -- ATTACH — always created (button works)
     --------------------------------------------------------------------
     local attach_btn = p_menu:button('Attach')
-    attach_btn:tooltip('Attach with current values')
+    attach_btn:tooltip('Attach with current slider values')
     attach_btn:event(menu.event.click, function()
         local veh = get_player_vehicle(pid)
         if not veh then
@@ -377,7 +378,14 @@ local function create_player_menu(pid, pname)
             return
         end
 
-        if do_attach(veh, offset.x, offset.y, offset.z, offset.pitch, offset.roll, offset.yaw) then
+        local x = sx and sx.value or 0.0
+        local y = sy and sy.value or 0.0
+        local z = sz and sz.value or 0.0
+        local p = sp and sp.value or 0.0
+        local r = srl and srl.value or 0.0
+        local yw = sy_rot and sy_rot.value or 0.0
+
+        if do_attach(veh, x, y, z, p, r, yw) then
             attached_player_name = pname
             safe_notify('Attached to ' .. pname)
         end
@@ -414,67 +422,67 @@ local function create_player_menu(pid, pname)
     end)
 
     --------------------------------------------------------------------
-    -- STEP SIZE — cycle between fine / medium / coarse
+    -- POSITION SLIDERS — NOT wrapped in pcall (pcall kills yields
+    -- in LuaJIT which is why they kept disappearing). These worked
+    -- in v1.2.0 because they were never inside their own pcall.
+    -- Buttons above are already created, so even if these crash,
+    -- the outer pcall in refresh_players catches it and the buttons
+    -- still exist in the submenu.
     --------------------------------------------------------------------
-    local step_sizes = { 0.1, 0.25, 0.5, 1.0 }
-    local step_names = { '0.1', '0.25', '0.5', '1.0' }
-    local rot_steps  = { 5.0, 15.0, 30.0, 45.0 }
-    local rot_names  = { '5', '15', '30', '45' }
-    local step_idx = 1
+    p_menu:breaker('Position')
 
-    local step_btn = p_menu:button('Step: 0.1 | Rot: 5')
-    step_btn:tooltip('Click to cycle step size')
-    step_btn:event(menu.event.click, function()
-        step_idx = step_idx % #step_sizes + 1
-        safe_notify('Step: ' .. step_names[step_idx] .. ' | Rotation: ' .. rot_names[step_idx])
-    end)
+    local sx = p_menu:number_float('Left / Right', menu.type.scroll)
+        :fmt('%.2f', -15.0, 15.0, 0.05)
+        :tooltip('Left or right')
 
-    --------------------------------------------------------------------
-    -- POSITION CONTROLS — +/- buttons for each axis
-    --------------------------------------------------------------------
-    local function reattach()
+    local sy = p_menu:number_float('Front / Back', menu.type.scroll)
+        :fmt('%.2f', -15.0, 15.0, 0.05)
+        :tooltip('Front or back')
+
+    local sz = p_menu:number_float('Up / Down', menu.type.scroll)
+        :fmt('%.2f', -15.0, 15.0, 0.05)
+        :tooltip('Up or down')
+
+    p_menu:breaker('Rotation')
+
+    local sp = p_menu:number_float('Pitch', menu.type.scroll)
+        :fmt('%.1f', -360.0, 360.0, 1.0)
+        :tooltip('Tilt forward or back')
+
+    local srl = p_menu:number_float('Roll', menu.type.scroll)
+        :fmt('%.1f', -360.0, 360.0, 1.0)
+        :tooltip('Tilt left or right')
+
+    local sy_rot = p_menu:number_float('Yaw', menu.type.scroll)
+        :fmt('%.1f', -360.0, 360.0, 1.0)
+        :tooltip('Face left or right')
+
+    -- Live update on slider change
+    local function live_update()
         if not attached_vehicle then return end
         if attached_player_name ~= pname then return end
         pcall(do_attach, attached_vehicle,
-            offset.x, offset.y, offset.z,
-            offset.pitch, offset.roll, offset.yaw)
+            sx.value, sy.value, sz.value,
+            sp.value, srl.value, sy_rot.value)
     end
 
-    local function make_axis(key, label_minus, label_plus, is_rot)
-        local bm = p_menu:button(label_minus)
-        bm:event(menu.event.click, function()
-            local s = is_rot and rot_steps[step_idx] or step_sizes[step_idx]
-            offset[key] = offset[key] - s
-            reattach()
-            safe_notify(key .. ': ' .. string.format('%.2f', offset[key]))
-        end)
-
-        local bp = p_menu:button(label_plus)
-        bp:event(menu.event.click, function()
-            local s = is_rot and rot_steps[step_idx] or step_sizes[step_idx]
-            offset[key] = offset[key] + s
-            reattach()
-            safe_notify(key .. ': ' .. string.format('%.2f', offset[key]))
-        end)
-    end
-
-    make_axis('x',     '< Left',       'Right >',      false)
-    make_axis('y',     '< Back',       'Front >',      false)
-    make_axis('z',     '< Down',       'Up >',         false)
-    make_axis('pitch', '< Pitch Down', 'Pitch Up >',   true)
-    make_axis('roll',  '< Roll Left',  'Roll Right >', true)
-    make_axis('yaw',   '< Yaw Left',   'Yaw Right >',  true)
+    sx:event(menu.event.change, function() live_update() end)
+    sy:event(menu.event.change, function() live_update() end)
+    sz:event(menu.event.change, function() live_update() end)
+    sp:event(menu.event.change, function() live_update() end)
+    srl:event(menu.event.change, function() live_update() end)
+    sy_rot:event(menu.event.change, function() live_update() end)
 
     --------------------------------------------------------------------
-    -- RESET OFFSETS
+    -- RESET SLIDERS
     --------------------------------------------------------------------
-    local reset_btn = p_menu:button('Reset Offsets')
+    local reset_btn = p_menu:button('Reset Sliders')
     reset_btn:tooltip('Reset all position and rotation to 0')
     reset_btn:event(menu.event.click, function()
-        offset.x = 0.0; offset.y = 0.0; offset.z = 0.0
-        offset.pitch = 0.0; offset.roll = 0.0; offset.yaw = 0.0
-        reattach()
-        safe_notify('Offsets reset to 0')
+        sx.value = 0.0; sy.value = 0.0; sz.value = 0.0
+        sp.value = 0.0; srl.value = 0.0; sy_rot.value = 0.0
+        live_update()
+        safe_notify('Sliders reset to 0')
     end)
 
     return true
