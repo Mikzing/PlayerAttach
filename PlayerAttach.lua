@@ -1,15 +1,15 @@
 --
---  ╔═╗┌┬┐┌┬┐┌─┐┌─┐┬ ┬
---  ╠═╣ │  │ ├─┤│  ├─┤
---  ╩ ╩ ┴  ┴ ┴ ┴└─┘┴ ┴
---       by Mikz
+--  ╔═╗┬  ┌─┐┬ ┬┌─┐┬─┐  ╔═╗┌┬┐┌┬┐┌─┐┌─┐┬ ┬
+--  ╠═╝│  ├─┤└┬┘├┤ ├┬┘  ╠═╣ │  │ ├─┤│  ├─┤
+--  ╩  ┴─┘┴ ┴ ┴ └─┘┴└─  ╩ ╩ ┴  ┴ ┴ ┴└─┘┴ ┴
+--                by Mikz
 --
---  Attach v3.8.0 — Lexis Script
+--  Player Attach v3.9.0 — Lexis Script
 --  Attach yourself to any player's vehicle
 --
 
-local SCRIPT_NAME    = 'Attach'
-local SCRIPT_VERSION = '3.8.0'
+local SCRIPT_NAME    = 'Player Attach'
+local SCRIPT_VERSION = '3.9.0'
 
 -- ─── Permission check ───────────────────────────────────────────────
 local perm_ok, perm_val = pcall(function()
@@ -434,15 +434,19 @@ local function refresh_players()
         if p_ok and p_id and p_id ~= my_id then session_ids[p_id] = true end
     end
 
-    -- Remove departed players
+    -- Remove departed players (collect first to avoid modifying table during iteration)
+    local to_remove = {}
     for pid, entry in pairs(player_entries) do
         if not session_ids[pid] then
+            to_remove[#to_remove + 1] = pid
             if attached_player_name and entry.name == attached_player_name then
                 do_detach()
                 safe_notify(entry.name .. ' left — detached', { icon = notify.icon.hazard })
             end
-            remove_player(pid)
         end
+    end
+    for _, pid in ipairs(to_remove) do
+        remove_player(pid)
     end
 
     -- Add new players
@@ -497,14 +501,18 @@ end)
 util.create_thread(function()
     while true do
         util.yield(5000)
+        local to_remove = {}
         for pid, entry in pairs(player_entries) do
             if not player_has_ped(pid) then
+                to_remove[#to_remove + 1] = pid
                 if attached_player_name and entry.name == attached_player_name then
                     do_detach()
                     safe_notify(entry.name .. ' left — detached', { icon = notify.icon.hazard })
                 end
-                remove_player(pid)
             end
+        end
+        for _, pid in ipairs(to_remove) do
+            remove_player(pid)
         end
     end
 end)
