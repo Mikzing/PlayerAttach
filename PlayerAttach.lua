@@ -37,8 +37,6 @@ local DETACH_ENTITY                           = 0x961AC54BF0613F5D
 local IS_ENTITY_ATTACHED                      = 0xB346476EF1A64897
 local IS_ENTITY_ATTACHED_TO_ENTITY            = 0xEFBE71898A993728
 local SET_ENTITY_COMPLETELY_DISABLE_COLLISION  = 0x1A9205C1B9EE827F
-local IS_PED_IN_ANY_VEHICLE                   = 0x997ABD671D25CA0B
-local GET_VEHICLE_PED_IS_IN                   = 0x9A9112A0FE9A4713
 
 -----------------------------------------------------------------------
 -- State
@@ -122,53 +120,13 @@ end
 -- Menu setup
 -----------------------------------------------------------------------
 local root = menu.root()
+local BASE_SIZE = 2 -- refresh button + breaker
 
--- Settings submenu with position/rotation sliders
-local settings_menu = root:submenu('Attach Settings')
-
-settings_menu:breaker('Position Offset')
-
-local slider_x = settings_menu:number_float('Left / Right', menu.type.scroll)
-    :fmt('%.2f', -10.0, 10.0, 0.10)
-    :tooltip('- Left / + Right')
-    :event(menu.event.click, function(opt)
-        if attached_vehicle then
-            do_attach(attached_vehicle, opt.value, slider_y.value, slider_z.value, slider_rot.value)
-        end
-    end)
-
-local slider_y = settings_menu:number_float('Back / Forward', menu.type.scroll)
-    :fmt('%.2f', -10.0, 10.0, 0.10)
-    :tooltip('- Backward / + Forward')
-    :event(menu.event.click, function(opt)
-        if attached_vehicle then
-            do_attach(attached_vehicle, slider_x.value, opt.value, slider_z.value, slider_rot.value)
-        end
-    end)
-
-local slider_z = settings_menu:number_float('Down / Up', menu.type.scroll)
-    :fmt('%.2f', -10.0, 10.0, 0.10)
-    :tooltip('- Down / + Up')
-    :event(menu.event.click, function(opt)
-        if attached_vehicle then
-            do_attach(attached_vehicle, slider_x.value, slider_y.value, opt.value, slider_rot.value)
-        end
-    end)
-
-settings_menu:breaker('Rotation')
-
-local slider_rot = settings_menu:number_float('Rotation', menu.type.scroll)
-    :fmt('%.0f', 0.0, 359.0, 1.0)
-    :tooltip('Rotate your character (degrees)')
-    :event(menu.event.click, function(opt)
-        if attached_vehicle then
-            do_attach(attached_vehicle, slider_x.value, slider_y.value, slider_z.value, opt.value)
-        end
-    end)
-
--- Detach button at root level for quick access
+-----------------------------------------------------------------------
+-- Quick detach at top (only thing at root besides player list)
+-----------------------------------------------------------------------
 root:button('Detach')
-    :tooltip('Detach from any vehicle you are currently attached to')
+    :tooltip('Quick detach from any vehicle you are attached to')
     :event(menu.event.click, function()
         if attached_vehicle then
             local name = attached_player_name or 'vehicle'
@@ -179,72 +137,18 @@ root:button('Detach')
         end
     end)
 
-root:toggle('Disable Collision')
-    :tooltip('Disable collision with the attached vehicle so you clip through it')
-    :event(menu.event.click, function(opt)
-        collision_disabled = opt.value
-        if attached_vehicle and collision_disabled then
-            invoker.call(SET_ENTITY_COMPLETELY_DISABLE_COLLISION, get_my_entity(), false, false)
-            notify.push(SCRIPT_NAME, 'Collision disabled')
-        end
+root:button('Refresh Players')
+    :tooltip('Refresh the player list below')
+    :event(menu.event.click, function()
+        rebuild_player_list()
     end)
 
 -----------------------------------------------------------------------
--- Player list
+-- Build a full submenu for one player with ALL settings inside
 -----------------------------------------------------------------------
-root:breaker('Players')
-
-local players_menu = root:submenu('Player List')
-local BASE_PLAYER_MENU_SIZE = 1 -- refresh button is always item #1
-
---- Attach to a specific player by their ID
-local function attach_to_player(player_id, preset_index)
-    local target = players.get(player_id)
-
-    if not target or not target.exists or not target.connected then
-        notify.push(SCRIPT_NAME, 'Player no longer in session')
-        return
-    end
-
-    if target.id == players.me().id then
-        notify.push(SCRIPT_NAME, 'Cannot attach to yourself')
-        return
-    end
-
-    if not target.in_vehicle then
-        notify.push(SCRIPT_NAME, target.name .. ' is not in a vehicle')
-        return
-    end
-
-    local x, y, z, rot
-    if preset_index then
-        local p = presets[preset_index]
-        x, y, z, rot = p[2], p[3], p[4], p[5]
-        slider_x.value = x
-        slider_y.value = y
-        slider_z.value = z
-        slider_rot.value = rot
-    else
-        x = slider_x.value
-        y = slider_y.value
-        z = slider_z.value
-        rot = slider_rot.value
-    end
-
-    do_attach(target.vehicle, x, y, z, rot)
-    attached_player_name = target.name
-
-    local msg = 'Attached to ' .. target.name
-    if preset_index then
-        msg = msg .. ' (' .. presets[preset_index][1] .. ')'
-    end
-    notify.push(SCRIPT_NAME, msg)
-end
-
---- Build a submenu for a single player inside players_menu
 local function add_player_menu(player)
     if player.id == players.me().id then
-        return -- skip self
+        return
     end
 
     local label = player.name
@@ -252,47 +156,140 @@ local function add_player_menu(player)
         label = label .. ' [On Foot]'
     end
 
-    local p_menu = players_menu:submenu(label)
+    local p_menu = root:submenu(label)
+    local pid = player.id
 
-    -- Attach with current slider values
-    p_menu:button('Attach')
-        :tooltip('Attach to ' .. player.name .. '\'s vehicle using current settings')
-        :event(menu.event.click, function()
-            attach_to_player(player.id)
-        end)
+    --------------------------------------------------------------------
+    -- Position sliders (per-player, all inside this player's menu)
+    --------------------------------------------------------------------
+    p_menu:breaker('Position Offset')
 
-    -- Preset buttons
+    local sx = p_menu:number_float('Left / Right', menu.type.scroll)
+        :fmt('%.2f', -10.0, 10.0, 0.10)
+        :tooltip('- Left / + Right')
+
+    local sy = p_menu:number_float('Back / Forward', menu.type.scroll)
+        :fmt('%.2f', -10.0, 10.0, 0.10)
+        :tooltip('- Backward / + Forward')
+
+    local sz = p_menu:number_float('Down / Up', menu.type.scroll)
+        :fmt('%.2f', -10.0, 10.0, 0.10)
+        :tooltip('- Down / + Up')
+
+    local sr = p_menu:number_float('Rotation', menu.type.scroll)
+        :fmt('%.0f', 0.0, 359.0, 1.0)
+        :tooltip('Rotate your character (degrees)')
+
+    -- Live update: when any slider changes and we're attached, reposition
+    sx:event(menu.event.click, function(opt)
+        if attached_vehicle and attached_player_name == player.name then
+            do_attach(attached_vehicle, opt.value, sy.value, sz.value, sr.value)
+        end
+    end)
+
+    sy:event(menu.event.click, function(opt)
+        if attached_vehicle and attached_player_name == player.name then
+            do_attach(attached_vehicle, sx.value, opt.value, sz.value, sr.value)
+        end
+    end)
+
+    sz:event(menu.event.click, function(opt)
+        if attached_vehicle and attached_player_name == player.name then
+            do_attach(attached_vehicle, sx.value, sy.value, opt.value, sr.value)
+        end
+    end)
+
+    sr:event(menu.event.click, function(opt)
+        if attached_vehicle and attached_player_name == player.name then
+            do_attach(attached_vehicle, sx.value, sy.value, sz.value, opt.value)
+        end
+    end)
+
+    --------------------------------------------------------------------
+    -- Presets
+    --------------------------------------------------------------------
     p_menu:breaker('Presets')
 
     for i, preset in ipairs(presets) do
         p_menu:button(preset[1])
-            :tooltip('Attach to ' .. preset[1] .. ' of vehicle')
+            :tooltip('Attach to ' .. preset[1] .. ' of their vehicle')
             :event(menu.event.click, function()
-                attach_to_player(player.id, i)
+                local target = players.get(pid)
+                if not target or not target.exists or not target.connected then
+                    notify.push(SCRIPT_NAME, 'Player no longer in session')
+                    return
+                end
+                if not target.in_vehicle then
+                    notify.push(SCRIPT_NAME, target.name .. ' is not in a vehicle')
+                    return
+                end
+
+                sx.value = preset[2]
+                sy.value = preset[3]
+                sz.value = preset[4]
+                sr.value = preset[5]
+
+                do_attach(target.vehicle, preset[2], preset[3], preset[4], preset[5])
+                attached_player_name = target.name
+                notify.push(SCRIPT_NAME, 'Attached to ' .. target.name .. ' (' .. preset[1] .. ')')
             end)
     end
 
-    -- Detach
+    --------------------------------------------------------------------
+    -- Actions
+    --------------------------------------------------------------------
     p_menu:breaker('Actions')
+
+    p_menu:button('Attach')
+        :tooltip('Attach using the position and rotation values above')
+        :event(menu.event.click, function()
+            local target = players.get(pid)
+            if not target or not target.exists or not target.connected then
+                notify.push(SCRIPT_NAME, 'Player no longer in session')
+                return
+            end
+            if target.id == players.me().id then
+                notify.push(SCRIPT_NAME, 'Cannot attach to yourself')
+                return
+            end
+            if not target.in_vehicle then
+                notify.push(SCRIPT_NAME, target.name .. ' is not in a vehicle')
+                return
+            end
+
+            do_attach(target.vehicle, sx.value, sy.value, sz.value, sr.value)
+            attached_player_name = target.name
+            notify.push(SCRIPT_NAME, 'Attached to ' .. target.name)
+        end)
 
     p_menu:button('Detach')
         :tooltip('Detach from this player\'s vehicle')
         :event(menu.event.click, function()
             if attached_vehicle then
                 do_detach()
-                notify.push(SCRIPT_NAME, 'Detached from ' .. player.name)
+                notify.push(SCRIPT_NAME, 'Detached')
             else
                 notify.push(SCRIPT_NAME, 'Not attached to anything')
             end
         end)
+
+    p_menu:toggle('Disable Collision')
+        :tooltip('Clip through the vehicle instead of colliding with it')
+        :event(menu.event.click, function(opt)
+            collision_disabled = opt.value
+            if attached_vehicle and collision_disabled then
+                invoker.call(SET_ENTITY_COMPLETELY_DISABLE_COLLISION, get_my_entity(), false, false)
+                notify.push(SCRIPT_NAME, 'Collision disabled')
+            end
+        end)
 end
 
---- Rebuild the entire player list
-local function rebuild_player_list()
-    -- Clear existing player entries (keep refresh button)
-    players_menu:resize(BASE_PLAYER_MENU_SIZE)
+-----------------------------------------------------------------------
+-- Build / rebuild the full player list at root level
+-----------------------------------------------------------------------
+function rebuild_player_list()
+    root:resize(BASE_SIZE)
 
-    -- Add all current session players
     local player_list = players.list()
     local count = 0
 
@@ -303,15 +300,8 @@ local function rebuild_player_list()
         end
     end
 
-    notify.push(SCRIPT_NAME, 'Player list refreshed (' .. count .. ' players)')
+    notify.push(SCRIPT_NAME, 'Found ' .. count .. ' players')
 end
-
--- Refresh button (always first item in players_menu)
-players_menu:button('Refresh Players')
-    :tooltip('Refresh the player list')
-    :event(menu.event.click, function()
-        rebuild_player_list()
-    end)
 
 -----------------------------------------------------------------------
 -- Auto-refresh on player join/leave
@@ -321,7 +311,6 @@ events.subscribe(events.event.player_join, function(data)
 end)
 
 events.subscribe(events.event.player_leave, function(data)
-    -- Auto-detach if our attached player left
     if attached_player_name and data.player.name == attached_player_name then
         do_detach()
         notify.push(SCRIPT_NAME, 'Auto-detached: ' .. data.player.name .. ' left', { icon = notify.icon.hazard })
@@ -334,7 +323,6 @@ end)
 -- Initial build + startup
 -----------------------------------------------------------------------
 util.create_job(function()
-    -- Wait a moment for session data to be ready
     util.yield(1000)
     rebuild_player_list()
 end)
