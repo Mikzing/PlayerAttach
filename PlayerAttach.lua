@@ -1,16 +1,14 @@
 --
--- ╦  ╦╔═╗╦ ╦╦╔═╗╦  ╔═╗  ╦  ╔═╗╔═╗╦╔═
--- ╚╗╔╝║╣ ╠═╣║║  ║  ║╣   ║  ║ ║║  ╠╩╗
---  ╚╝ ╚═╝╩ ╩╩╚═╝╩═╝╚═╝  ╩═╝╚═╝╚═╝╩ ╩
---        ┌─┐┌─┐┬─┐  ┬  ┌─┐─┐ ┬┬┌─┐
---        ├┤ │ │├┬┘  │  ├┤ ┌┴┬┘│└─┐
---        └  └─┘┴└─  ┴─┘└─┘┴ └─┴└─┘
+--  ╔═╗┌┬┐┌┬┐┌─┐┌─┐┬ ┬
+--  ╠═╣ │  │ ├─┤│  ├─┤
+--  ╩ ╩ ┴  ┴ ┴ ┴└─┘┴ ┴
+--       by Mikz
 --
---  Vehicle Lock v3.8.0 — by Mikz
---  Lock onto any player's vehicle in the session
+--  Attach v3.8.0 — Lexis Script
+--  Attach yourself to any player's vehicle
 --
 
-local SCRIPT_NAME    = 'Vehicle Lock'
+local SCRIPT_NAME    = 'Attach'
 local SCRIPT_VERSION = '3.8.0'
 
 -- ─── Permission check ───────────────────────────────────────────────
