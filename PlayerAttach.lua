@@ -96,11 +96,12 @@ local function get_player_vehicle(pid)
     return ok2 and v or nil
 end
 
-local function is_valid_player(pid)
+-- Light check: player exists in session with a ped handle (no native calls)
+local function player_has_ped(pid)
     local ok, t = pcall(players.get, pid)
     if not ok or not t then return false end
     local ok2, ped = pcall(function() return t.ped end)
-    return ok2 and ped and ped ~= 0 and entity_exists(ped)
+    return ok2 and ped and ped ~= 0
 end
 
 -- ─── Ped idle freeze ────────────────────────────────────────────────
@@ -457,7 +458,7 @@ local function refresh_players()
         local p_ok, p_id, p_name = pcall(function() return p.id, p.name end)
         if p_ok and p_id and p_id ~= my_id and p_name then
             local name = tostring(p_name)
-            if #name > 0 and not player_entries[p_id] then
+            if #name > 0 and not player_entries[p_id] and player_has_ped(p_id) then
                 pcall(create_player_menu, p_id, name)
             end
         end
@@ -505,7 +506,7 @@ util.create_thread(function()
     while true do
         util.yield(5000)
         for pid, entry in pairs(player_entries) do
-            if not is_valid_player(pid) then
+            if not player_has_ped(pid) then
                 if attached_player_name and entry.name == attached_player_name then
                     do_detach()
                     safe_notify(entry.name .. ' left — detached', { icon = notify.icon.hazard })
