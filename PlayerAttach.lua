@@ -18,7 +18,7 @@
 --
 
 local SCRIPT_NAME = 'Player Attach'
-local SCRIPT_VERSION = '1.0.0'
+local SCRIPT_VERSION = '1.1.0'
 
 -----------------------------------------------------------------------
 -- Permission check
@@ -32,11 +32,12 @@ end
 -----------------------------------------------------------------------
 -- Native hashes
 -----------------------------------------------------------------------
-local ATTACH_ENTITY_TO_ENTITY                 = 0x6B9BBD38AB0796DF
-local DETACH_ENTITY                           = 0x961AC54BF0613F5D
-local IS_ENTITY_ATTACHED                      = 0xB346476EF1A64897
-local IS_ENTITY_ATTACHED_TO_ENTITY            = 0xEFBE71898A993728
-local SET_ENTITY_COMPLETELY_DISABLE_COLLISION  = 0x1A9205C1B9EE827F
+local N_ATTACH_ENTITY_TO_ENTITY                = 0x6B9BBD38AB0796DF
+local N_DETACH_ENTITY                          = 0x961AC54BF0613F5D
+local N_IS_ENTITY_ATTACHED                     = 0xB346476EF1A64897
+local N_IS_ENTITY_ATTACHED_TO_ENTITY           = 0xEFBE71898A993728
+local N_SET_ENTITY_COMPLETELY_DISABLE_COLLISION = 0x1A9205C1B9EE827F
+local N_DOES_ENTITY_EXIST                      = 0x7239B21A38F536BA
 
 -----------------------------------------------------------------------
 -- State
@@ -57,59 +58,100 @@ local presets = {
 }
 
 -----------------------------------------------------------------------
--- Core functions
+-- Safe native call wrapper
 -----------------------------------------------------------------------
+local function safe_call(...)
+    local ok, result = pcall(invoker.call, ...)
+    if ok then
+        return result
+    end
+    return nil
+end
+
+-----------------------------------------------------------------------
+-- Entity helpers
+-----------------------------------------------------------------------
+local function entity_exists(handle)
+    if not handle or handle == 0 then
+        return false
+    end
+    local result = safe_call(N_DOES_ENTITY_EXIST, handle)
+    if result then
+        return result.bool
+    end
+    return false
+end
 
 local function get_my_entity()
     local me = players.me()
-    if me.in_vehicle then
+    if not me then
+        return nil
+    end
+    if me.in_vehicle and me.vehicle ~= 0 then
         return me.vehicle
-    else
+    elseif me.ped ~= 0 then
         return me.ped
     end
+    return nil
 end
 
+-----------------------------------------------------------------------
+-- Core functions
+-----------------------------------------------------------------------
 local function do_attach(target_vehicle, x, y, z, rot)
     local entity = get_my_entity()
+    if not entity then
+        notify.push(SCRIPT_NAME, 'Could not get your entity')
+        return false
+    end
+
+    if not entity_exists(target_vehicle) then
+        notify.push(SCRIPT_NAME, 'Target vehicle no longer exists')
+        return false
+    end
 
     -- Detach first if already attached (for live repositioning)
-    if invoker.call(IS_ENTITY_ATTACHED_TO_ENTITY, entity, target_vehicle).bool then
-        invoker.call(DETACH_ENTITY, entity, true, true)
+    local check = safe_call(N_IS_ENTITY_ATTACHED_TO_ENTITY, entity, target_vehicle)
+    if check and check.bool then
+        safe_call(N_DETACH_ENTITY, entity, 1, 1)
     end
 
     -- Attach to the target vehicle center (bone 0)
-    invoker.call(ATTACH_ENTITY_TO_ENTITY,
+    -- GTA BOOL params are integers: 1 = true, 0 = false
+    safe_call(N_ATTACH_ENTITY_TO_ENTITY,
         entity,             -- entity1: our ped or vehicle
         target_vehicle,     -- entity2: their vehicle
         0,                  -- boneIndex: 0 = center
         x, y, z,            -- position offset (local coords)
         0.0, 0.0, rot,      -- rotation offset (only Z exposed)
-        true,               -- p9
-        false,              -- useSoftPinning: false = won't detach
-        true,               -- collision: true = keep collision
-        false,              -- isPed
+        1,                  -- p9
+        0,                  -- useSoftPinning: 0 = won't detach
+        1,                  -- collision: 1 = keep collision
+        0,                  -- isPed
         0,                  -- rotationOrder
-        true                -- syncRot
+        1                   -- syncRot
     )
 
     attached_vehicle = target_vehicle
 
     if collision_disabled then
-        invoker.call(SET_ENTITY_COMPLETELY_DISABLE_COLLISION, entity, false, false)
+        safe_call(N_SET_ENTITY_COMPLETELY_DISABLE_COLLISION, entity, 0, 0)
     end
+
+    return true
 end
 
 local function do_detach()
-    local me = players.me()
+    local entity = get_my_entity()
+    if not entity then
+        attached_vehicle = nil
+        attached_player_name = nil
+        return
+    end
 
-    if me.in_vehicle then
-        if invoker.call(IS_ENTITY_ATTACHED, me.vehicle).bool then
-            invoker.call(DETACH_ENTITY, me.vehicle, true, true)
-        end
-    else
-        if invoker.call(IS_ENTITY_ATTACHED, me.ped).bool then
-            invoker.call(DETACH_ENTITY, me.ped, true, true)
-        end
+    local check = safe_call(N_IS_ENTITY_ATTACHED, entity)
+    if check and check.bool then
+        safe_call(N_DETACH_ENTITY, entity, 1, 1)
     end
 
     attached_vehicle = nil
@@ -120,10 +162,10 @@ end
 -- Menu setup
 -----------------------------------------------------------------------
 local root = menu.root()
-local BASE_SIZE = 2 -- refresh button + breaker
+local BASE_SIZE = 2 -- detach button + refresh button
 
 -----------------------------------------------------------------------
--- Quick detach at top (only thing at root besides player list)
+-- Quick detach + refresh at top
 -----------------------------------------------------------------------
 root:button('Detach')
     :tooltip('Quick detach from any vehicle you are attached to')
@@ -158,9 +200,10 @@ local function add_player_menu(player)
 
     local p_menu = root:submenu(label)
     local pid = player.id
+    local pname = player.name
 
     --------------------------------------------------------------------
-    -- Position sliders (per-player, all inside this player's menu)
+    -- Position sliders
     --------------------------------------------------------------------
     p_menu:breaker('Position Offset')
 
@@ -180,27 +223,27 @@ local function add_player_menu(player)
         :fmt('%.0f', 0.0, 359.0, 1.0)
         :tooltip('Rotate your character (degrees)')
 
-    -- Live update: when any slider changes and we're attached, reposition
+    -- Live update sliders when already attached to this player
     sx:event(menu.event.click, function(opt)
-        if attached_vehicle and attached_player_name == player.name then
+        if attached_vehicle and attached_player_name == pname then
             do_attach(attached_vehicle, opt.value, sy.value, sz.value, sr.value)
         end
     end)
 
     sy:event(menu.event.click, function(opt)
-        if attached_vehicle and attached_player_name == player.name then
+        if attached_vehicle and attached_player_name == pname then
             do_attach(attached_vehicle, sx.value, opt.value, sz.value, sr.value)
         end
     end)
 
     sz:event(menu.event.click, function(opt)
-        if attached_vehicle and attached_player_name == player.name then
+        if attached_vehicle and attached_player_name == pname then
             do_attach(attached_vehicle, sx.value, sy.value, opt.value, sr.value)
         end
     end)
 
     sr:event(menu.event.click, function(opt)
-        if attached_vehicle and attached_player_name == player.name then
+        if attached_vehicle and attached_player_name == pname then
             do_attach(attached_vehicle, sx.value, sy.value, sz.value, opt.value)
         end
     end)
@@ -219,7 +262,7 @@ local function add_player_menu(player)
                     notify.push(SCRIPT_NAME, 'Player no longer in session')
                     return
                 end
-                if not target.in_vehicle then
+                if not target.in_vehicle or target.vehicle == 0 then
                     notify.push(SCRIPT_NAME, target.name .. ' is not in a vehicle')
                     return
                 end
@@ -229,9 +272,10 @@ local function add_player_menu(player)
                 sz.value = preset[4]
                 sr.value = preset[5]
 
-                do_attach(target.vehicle, preset[2], preset[3], preset[4], preset[5])
-                attached_player_name = target.name
-                notify.push(SCRIPT_NAME, 'Attached to ' .. target.name .. ' (' .. preset[1] .. ')')
+                if do_attach(target.vehicle, preset[2], preset[3], preset[4], preset[5]) then
+                    attached_player_name = target.name
+                    notify.push(SCRIPT_NAME, 'Attached to ' .. target.name .. ' (' .. preset[1] .. ')')
+                end
             end)
     end
 
@@ -252,14 +296,15 @@ local function add_player_menu(player)
                 notify.push(SCRIPT_NAME, 'Cannot attach to yourself')
                 return
             end
-            if not target.in_vehicle then
+            if not target.in_vehicle or target.vehicle == 0 then
                 notify.push(SCRIPT_NAME, target.name .. ' is not in a vehicle')
                 return
             end
 
-            do_attach(target.vehicle, sx.value, sy.value, sz.value, sr.value)
-            attached_player_name = target.name
-            notify.push(SCRIPT_NAME, 'Attached to ' .. target.name)
+            if do_attach(target.vehicle, sx.value, sy.value, sz.value, sr.value) then
+                attached_player_name = target.name
+                notify.push(SCRIPT_NAME, 'Attached to ' .. target.name)
+            end
         end)
 
     p_menu:button('Detach')
@@ -278,7 +323,10 @@ local function add_player_menu(player)
         :event(menu.event.click, function(opt)
             collision_disabled = opt.value
             if attached_vehicle and collision_disabled then
-                invoker.call(SET_ENTITY_COMPLETELY_DISABLE_COLLISION, get_my_entity(), false, false)
+                local entity = get_my_entity()
+                if entity then
+                    safe_call(N_SET_ENTITY_COMPLETELY_DISABLE_COLLISION, entity, 0, 0)
+                end
                 notify.push(SCRIPT_NAME, 'Collision disabled')
             end
         end)
@@ -290,13 +338,19 @@ end
 function rebuild_player_list()
     root:resize(BASE_SIZE)
 
-    local player_list = players.list()
-    local count = 0
+    local ok, player_list = pcall(players.list)
+    if not ok or not player_list then
+        notify.push(SCRIPT_NAME, 'Could not get player list')
+        return
+    end
 
+    local count = 0
     for _, player in ipairs(player_list) do
         if player.connected and player.exists and player.id ~= players.me().id then
-            add_player_menu(player)
-            count = count + 1
+            local ok2 = pcall(add_player_menu, player)
+            if ok2 then
+                count = count + 1
+            end
         end
     end
 
@@ -311,7 +365,7 @@ events.subscribe(events.event.player_join, function(data)
 end)
 
 events.subscribe(events.event.player_leave, function(data)
-    if attached_player_name and data.player.name == attached_player_name then
+    if attached_player_name and data.player and data.player.name == attached_player_name then
         do_detach()
         notify.push(SCRIPT_NAME, 'Auto-detached: ' .. data.player.name .. ' left', { icon = notify.icon.hazard })
     end
@@ -323,7 +377,7 @@ end)
 -- Initial build + startup
 -----------------------------------------------------------------------
 util.create_job(function()
-    util.yield(1000)
+    util.yield(2000)
     rebuild_player_list()
 end)
 
