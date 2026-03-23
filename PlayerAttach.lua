@@ -169,9 +169,10 @@ local function do_detach()
     attach_state.active  = false
     attach_state.vehicle = nil
 
+    -- Always try to detach the entity, even if our state got out of sync
     local entity = get_my_entity()
-    if entity and is_attached(entity) then
-        call_native(N_DETACH_ENTITY, entity, 1, 1)
+    if entity then
+        pcall(call_native, N_DETACH_ENTITY, entity, 1, 1)
     end
 
     set_idle_anims(true)
@@ -384,12 +385,8 @@ local function create_player_menu(pid, pname)
     local det = p_menu:button('Detach')
     det:tooltip('Detach from ' .. pname)
     det:event(menu.event.click, function()
-        if attached_vehicle then
-            do_detach()
-            safe_notify('Detached')
-        else
-            safe_notify('Not attached')
-        end
+        do_detach()
+        safe_notify('Detached from ' .. pname)
     end)
 
     -- Presets sub-submenu
@@ -494,13 +491,9 @@ end
 local det_btn = root:button('Detach')
 det_btn:tooltip('Quick detach from any vehicle you are attached to')
 det_btn:event(menu.event.click, function()
-    if attached_vehicle then
-        local name = attached_player_name or 'vehicle'
-        do_detach()
-        safe_notify('Detached from ' .. name)
-    else
-        safe_notify('Not attached')
-    end
+    local name = attached_player_name or 'vehicle'
+    do_detach()
+    safe_notify('Detached from ' .. name)
 end)
 
 -- ─── Refresh Players ────────────────────────────────────────────────
