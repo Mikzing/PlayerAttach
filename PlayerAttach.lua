@@ -12,12 +12,12 @@
 -- ██║  ██║   ██║      ██║   ██║  ██║╚██████╗██║  ██║
 -- ╚═╝  ╚═╝   ╚═╝      ╚═╝   ╚═╝  ╚═╝ ╚═════╝╚═╝  ╚═╝
 --
--- Player Attach v3.6.0 — Lexis Mod Menu Script
+-- Player Attach v3.7.0 — Lexis Mod Menu Script
 -- Attach your ped or vehicle to another player's vehicle
 --
 
 local SCRIPT_NAME    = 'Player Attach'
-local SCRIPT_VERSION = '3.6.0'
+local SCRIPT_VERSION = '3.7.0'
 
 -- ─── Permission check ───────────────────────────────────────────────
 local perm_ok, perm_val = pcall(function()
@@ -112,14 +112,14 @@ local function set_idle_anims(enabled)
     call_native(N_SET_PED_CAN_PLAY_AMBIENT_BASE_ANIMS, ped, v)
 end
 
--- ─── Presets ────────────────────────────────────────────────────────
+-- ─── Presets { name, tooltip, x, y, z, pitch, roll, yaw } ──────────
 local presets = {
-    { 'Roof',         0.0,   0.0,  1.2,  0.0, 0.0,   0.0 },
-    { 'Hood',         0.0,   2.5,  0.8,  0.0, 0.0,   0.0 },
-    { 'Trunk',        0.0,  -2.5,  0.8,  0.0, 0.0, 180.0 },
-    { 'Left Side',   -1.2,   0.0,  0.5,  0.0, 0.0, -90.0 },
-    { 'Right Side',   1.2,   0.0,  0.5,  0.0, 0.0,  90.0 },
-    { 'Hanging Back', 0.0,  -2.0,  0.2,  0.0, 0.0, 180.0 },
+    { 'Roof',         'Stand on top of the vehicle',             0.0,   0.0,  1.2,  0.0, 0.0,   0.0 },
+    { 'Hood',         'Stand on the front hood',                 0.0,   2.5,  0.8,  0.0, 0.0,   0.0 },
+    { 'Trunk',        'Stand on the back trunk, facing rear',    0.0,  -2.5,  0.8,  0.0, 0.0, 180.0 },
+    { 'Left Side',    'Hang off the left side, facing outward', -1.2,   0.0,  0.5,  0.0, 0.0, -90.0 },
+    { 'Right Side',   'Hang off the right side, facing outward', 1.2,   0.0,  0.5,  0.0, 0.0,  90.0 },
+    { 'Hanging Back', 'Cling to the rear bumper',                0.0,  -2.0,  0.2,  0.0, 0.0, 180.0 },
 }
 
 -- ─── Attachment state ───────────────────────────────────────────────
@@ -247,20 +247,21 @@ local function build_position_controls(parent)
     -- Try sliders first
     local sliders = {}
     local slider_defs = {
-        { 'Left / Right', 'x',     -10.0,  10.0, 0.10, '%.2f' },
-        { 'Back / Front', 'y',     -10.0,  10.0, 0.10, '%.2f' },
-        { 'Down / Up',    'z',     -10.0,  10.0, 0.10, '%.2f' },
-        { 'Pitch',        'pitch', -180.0, 180.0, 1.0, '%.0f' },
-        { 'Roll',         'roll',  -180.0, 180.0, 1.0, '%.0f' },
-        { 'Yaw',          'yaw',   -180.0, 180.0, 1.0, '%.0f' },
+        { 'X  Left / Right', 'x',     -10.0,  10.0, 0.10, '%.2f', 'Move left (-) or right (+)' },
+        { 'Y  Back / Front', 'y',     -10.0,  10.0, 0.10, '%.2f', 'Move backward (-) or forward (+)' },
+        { 'Z  Down / Up',    'z',     -10.0,  10.0, 0.10, '%.2f', 'Move down (-) or up (+)' },
+        { 'Pitch',           'pitch', -180.0, 180.0, 1.0, '%.0f', 'Tilt forward/backward (nod)' },
+        { 'Roll',            'roll',  -180.0, 180.0, 1.0, '%.0f', 'Tilt sideways (lean)' },
+        { 'Yaw',             'yaw',   -180.0, 180.0, 1.0, '%.0f', 'Rotate left/right (turn)' },
     }
 
     local slider_count = 0
     for _, d in ipairs(slider_defs) do
-        local label, key, lo, hi, step, fmt = d[1], d[2], d[3], d[4], d[5], d[6]
+        local label, key, lo, hi, step, fmt, tip = d[1], d[2], d[3], d[4], d[5], d[6], d[7]
         local ok, s = pcall(function()
             local sl = parent:number_float(label, menu.type.scroll)
             sl:fmt(fmt, lo, hi, step)
+            sl:tooltip(tip)
             sl:event(menu.event.click, function(opt)
                 offset[key] = opt.value
                 reattach()
@@ -275,7 +276,9 @@ local function build_position_controls(parent)
 
     -- If at least position sliders worked, use them
     if slider_count >= 3 then
-        parent:button('Reset Position'):event(menu.event.click, function()
+        local rst = parent:button('Reset Position')
+        rst:tooltip('Reset all offsets back to 0')
+        rst:event(menu.event.click, function()
             offset.x, offset.y, offset.z = 0.0, 0.0, 0.0
             offset.pitch, offset.roll, offset.yaw = 0.0, 0.0, 0.0
             for _, key in ipairs({ 'x', 'y', 'z', 'pitch', 'roll', 'yaw' }) do
@@ -299,28 +302,35 @@ local function build_position_controls(parent)
     local rot_names  = { '1', '5', '15', '30', '45' }
     local step_idx   = 2
 
-    parent:button('Cycle Step Size'):event(menu.event.click, function()
+    local cyc = parent:button('Cycle Step Size [0.1]')
+    cyc:tooltip('Click to cycle: 0.05 / 0.1 / 0.25 / 0.5 / 1.0')
+    cyc:event(menu.event.click, function()
         step_idx = step_idx % 5 + 1
+        pcall(function() cyc:name('Cycle Step Size [' .. step_names[step_idx] .. ']') end)
         safe_notify('Step: ' .. step_names[step_idx] .. '  Rot: ' .. rot_names[step_idx])
     end)
 
     local axes = {
-        { 'x',     'Left',       'Right',      false },
-        { 'y',     'Back',       'Front',      false },
-        { 'z',     'Down',       'Up',         false },
-        { 'pitch', 'Pitch Down', 'Pitch Up',   true  },
-        { 'roll',  'Roll Left',  'Roll Right',  true  },
-        { 'yaw',   'Yaw Left',   'Yaw Right',   true  },
+        { 'x',     '< Left',      'Right >',     false, 'Move left',          'Move right' },
+        { 'y',     '< Back',      'Front >',     false, 'Move backward',      'Move forward' },
+        { 'z',     '< Down',      'Up >',        false, 'Move down',          'Move up' },
+        { 'pitch', '< Pitch Down','Pitch Up >',  true,  'Tilt forward',       'Tilt backward' },
+        { 'roll',  '< Roll Left', 'Roll Right >', true,  'Roll to the left',   'Roll to the right' },
+        { 'yaw',   '< Yaw Left',  'Yaw Right >', true,  'Turn left',          'Turn right' },
     }
     for _, a in ipairs(axes) do
-        local key, lbl_neg, lbl_pos, is_rot = a[1], a[2], a[3], a[4]
-        parent:button(lbl_neg):event(menu.event.click, function()
+        local key, lbl_neg, lbl_pos, is_rot, tip_neg, tip_pos = a[1], a[2], a[3], a[4], a[5], a[6]
+        local bn = parent:button(lbl_neg)
+        bn:tooltip(tip_neg)
+        bn:event(menu.event.click, function()
             local s = is_rot and rot_steps[step_idx] or step_sizes[step_idx]
             offset[key] = offset[key] - s
             reattach()
             safe_notify(key .. ' = ' .. string.format('%.2f', offset[key]))
         end)
-        parent:button(lbl_pos):event(menu.event.click, function()
+        local bp = parent:button(lbl_pos)
+        bp:tooltip(tip_pos)
+        bp:event(menu.event.click, function()
             local s = is_rot and rot_steps[step_idx] or step_sizes[step_idx]
             offset[key] = offset[key] + s
             reattach()
@@ -328,7 +338,9 @@ local function build_position_controls(parent)
         end)
     end
 
-    parent:button('Reset Position'):event(menu.event.click, function()
+    local rst = parent:button('Reset Position')
+    rst:tooltip('Reset all offsets back to 0')
+    rst:event(menu.event.click, function()
         offset.x, offset.y, offset.z = 0.0, 0.0, 0.0
         offset.pitch, offset.roll, offset.yaw = 0.0, 0.0, 0.0
         reattach()
@@ -346,25 +358,10 @@ local function create_player_menu(pid, pname)
     local entry = { menu = p_menu, name = pname, sliders = nil }
     player_entries[pid] = entry
 
-    -- Presets
-    for _, p in ipairs(presets) do
-        p_menu:button(p[1]):event(menu.event.click, function()
-            local veh = get_player_vehicle(pid)
-            if not veh then safe_notify(pname .. ' is not in a vehicle'); return end
-
-            offset.x, offset.y, offset.z = p[2], p[3], p[4]
-            offset.pitch, offset.roll, offset.yaw = p[5], p[6], p[7]
-            sync_sliders(entry)
-
-            if do_attach(veh, p[2], p[3], p[4], p[5], p[6], p[7]) then
-                attached_player_name = pname
-                safe_notify('Attached to ' .. pname .. ' (' .. p[1] .. ')')
-            end
-        end)
-    end
-
-    -- Attach / Detach
-    p_menu:button('Attach'):event(menu.event.click, function()
+    -- Attach with current offset
+    local att = p_menu:button('Attach')
+    att:tooltip('Attach to ' .. pname .. ' using current position offsets')
+    att:event(menu.event.click, function()
         local veh = get_player_vehicle(pid)
         if not veh then safe_notify(pname .. ' is not in a vehicle'); return end
         if do_attach(veh, offset.x, offset.y, offset.z, offset.pitch, offset.roll, offset.yaw) then
@@ -373,7 +370,10 @@ local function create_player_menu(pid, pname)
         end
     end)
 
-    p_menu:button('Detach'):event(menu.event.click, function()
+    -- Detach
+    local det = p_menu:button('Detach')
+    det:tooltip('Detach from ' .. pname)
+    det:event(menu.event.click, function()
         if attached_vehicle then
             do_detach()
             safe_notify('Detached')
@@ -382,9 +382,33 @@ local function create_player_menu(pid, pname)
         end
     end)
 
-    -- Adjust Position sub-submenu inside player tab
+    -- Presets sub-submenu
+    local presets_sub = p_menu:submenu('Presets')
+    if presets_sub then
+        presets_sub:tooltip('Quick-attach to common positions on the vehicle')
+        for _, p in ipairs(presets) do
+            local btn = presets_sub:button(p[1])
+            btn:tooltip(p[2])
+            btn:event(menu.event.click, function()
+                local veh = get_player_vehicle(pid)
+                if not veh then safe_notify(pname .. ' is not in a vehicle'); return end
+
+                offset.x, offset.y, offset.z = p[3], p[4], p[5]
+                offset.pitch, offset.roll, offset.yaw = p[6], p[7], p[8]
+                sync_sliders(entry)
+
+                if do_attach(veh, p[3], p[4], p[5], p[6], p[7], p[8]) then
+                    attached_player_name = pname
+                    safe_notify('Attached to ' .. pname .. ' (' .. p[1] .. ')')
+                end
+            end)
+        end
+    end
+
+    -- Adjust Position sub-submenu
     local pos_sub = p_menu:submenu('Adjust Position')
     if pos_sub then
+        pos_sub:tooltip('Fine-tune your X/Y/Z position and rotation on the vehicle')
         entry.sliders = build_position_controls(pos_sub)
     end
 
@@ -445,7 +469,9 @@ local function refresh_players()
 end
 
 -- ─── Quick Detach ───────────────────────────────────────────────────
-root:button('Detach'):event(menu.event.click, function()
+local det_btn = root:button('Detach')
+det_btn:tooltip('Quick detach from any vehicle you are attached to')
+det_btn:event(menu.event.click, function()
     if attached_vehicle then
         local name = attached_player_name or 'vehicle'
         do_detach()
@@ -458,7 +484,9 @@ end)
 -- ─── Refresh Players ────────────────────────────────────────────────
 local refresh_requested = false
 
-root:button('Refresh Players'):event(menu.event.click, function()
+local ref_btn = root:button('Refresh Players')
+ref_btn:tooltip('Scan the session for players and update the list')
+ref_btn:event(menu.event.click, function()
     refresh_requested = true
 end)
 
