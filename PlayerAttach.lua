@@ -66,7 +66,7 @@ local presets = {
     { 'Roof',        0.0,   0.0,  1.2,  0.0, 0.0,   0.0 },
     { 'Hood',        0.0,   2.5,  0.8,  0.0, 0.0,   0.0 },
     { 'Trunk',       0.0,  -2.5,  0.8,  0.0, 0.0, 180.0 },
-    { 'Left Side',  -1.2,   0.0,  0.5,  0.0, 0.0, 270.0 },
+    { 'Left Side',  -1.2,   0.0,  0.5,  0.0, 0.0, -90.0 },
     { 'Right Side',  1.2,   0.0,  0.5,  0.0, 0.0,  90.0 },
     { 'Hanging Back', 0.0, -2.0,  0.2, 0.0, 0.0, 180.0 },
 }
@@ -298,15 +298,15 @@ local function add_player_menu(player)
     p_menu:breaker('Rotation')
 
     local sp = p_menu:number_float('Pitch', menu.type.scroll)
-        :fmt('%.1f', -180.0, 180.0, 1.0)
+        :fmt('%.1f', -360.0, 360.0, 1.0)
         :tooltip('Tilt forward or back')
 
     local srl = p_menu:number_float('Roll', menu.type.scroll)
-        :fmt('%.1f', -180.0, 180.0, 1.0)
+        :fmt('%.1f', -360.0, 360.0, 1.0)
         :tooltip('Tilt left or right')
 
     local sy_rot = p_menu:number_float('Yaw', menu.type.scroll)
-        :fmt('%.1f', -180.0, 180.0, 1.0)
+        :fmt('%.1f', -360.0, 360.0, 1.0)
         :tooltip('Face left or right')
 
     --------------------------------------------------------------------
