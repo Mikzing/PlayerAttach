@@ -37,8 +37,6 @@ local N_IS_ENTITY_ATTACHED                  = 0xB346476EF1A64897
 local N_DOES_ENTITY_EXIST                   = 0x7239B21A38F536BA
 local N_SET_PED_CAN_PLAY_AMBIENT_ANIMS      = 0x6EC47A344923E1ED
 local N_SET_PED_CAN_PLAY_AMBIENT_BASE_ANIMS = 0x0EB0585D15254740
-local N_GET_ENTITY_ROTATION                = 0xAFBD61CC738D9EB9
-local N_SET_ENTITY_ROTATION                = 0x8524A8B0171D7F07
 
 -- ─── Utilities ──────────────────────────────────────────────────────
 local function call_native(hash, ...)
@@ -62,17 +60,6 @@ end
 
 local function safe_notify(text, opts)
     pcall(notify.push, SCRIPT_NAME, tostring(text), opts)
-end
-
-local function parse_v3(r)
-    if not r then return 0, 0, 0 end
-    if type(r) == 'table' then
-        local x = tonumber(r.x or r[1]) or 0
-        local y = tonumber(r.y or r[2]) or 0
-        local z = tonumber(r.z or r[3]) or 0
-        return x, y, z
-    end
-    return 0, 0, 0
 end
 
 local function entity_exists(h)
@@ -150,19 +137,14 @@ local attach_state = {
 }
 
 local function raw_attach(entity, veh, x, y, z, pitch, yaw)
-    -- Position-only attachment; fixedRot=1 so rotation is independent.
-    -- We handle rotation ourselves via SET_ENTITY_ROTATION in a sync thread
-    -- because ATTACH_ENTITY_TO_ENTITY ignores pitch (xRot) for peds.
+    -- Rotation via native params: xRot=pitch, yRot=0, zRot=yaw
+    -- Note: GTA V ignores pitch (xRot) for peds (engine keeps them upright)
+    -- but yaw (zRot) works correctly for facing direction.
     call_native(N_ATTACH_ENTITY_TO_ENTITY,
         entity, veh, 0,
         x + 0.0, y + 0.0, z + 0.0,
-        0.0, 0.0, 0.0,
+        pitch + 0.0, 0.0, yaw + 0.0,
         0, 1, 1, 0, 2, 1)
-    -- Apply rotation immediately so there's no single-frame pop
-    local rot = call_native(N_GET_ENTITY_ROTATION, veh, 2)
-    local vp, vr, vy = parse_v3(rot)
-    call_native(N_SET_ENTITY_ROTATION, entity,
-        (vp + pitch) + 0.0, vr + 0.0, (vy + yaw) + 0.0, 2, 1)
 end
 
 local function do_attach(veh, x, y, z, pitch, yaw)
@@ -209,32 +191,9 @@ end
 -- ─── Player tracking (forward declaration) ─────────────────────────
 local player_entries = {}  -- pid → { menu, name, sliders }
 
--- ─── Rotation sync thread (per-frame) ───────────────────────────────
--- Since ATTACH_ENTITY_TO_ENTITY ignores pitch for peds, we use fixedRot=1
--- and manually sync the entity's rotation to vehicle_rotation + offsets.
-util.create_thread(function()
-    while true do
-        if attach_state.active and attach_state.vehicle then
-            local entity = get_my_entity()
-            if entity then
-                local rot = call_native(N_GET_ENTITY_ROTATION, attach_state.vehicle, 2)
-                local vp, vr, vy = parse_v3(rot)
-                call_native(N_SET_ENTITY_ROTATION, entity,
-                    (vp + attach_state.pitch) + 0.0,
-                    vr + 0.0,
-                    (vy + attach_state.yaw) + 0.0,
-                    2, 1)
-            end
-            util.yield(0)  -- every frame while attached
-        else
-            util.yield(200) -- idle when not attached
-        end
-    end
-end)
-
 -- ─── Re-attach thread ──────────────────────────────────────────────
--- Only handles re-attachment if the entity becomes detached unexpectedly.
--- Player leave detection is handled by Event.PLAYER_LEFT above.
+-- Re-attaches if the entity becomes detached unexpectedly.
+-- Player leave detection is handled by Event.PLAYER_LEFT.
 util.create_thread(function()
     while true do
         util.yield(200)
