@@ -457,7 +457,7 @@ local function refresh_players()
         local p_ok, p_id, p_name = pcall(function() return p.id, p.name end)
         if p_ok and p_id and p_id ~= my_id and p_name then
             local name = tostring(p_name)
-            if #name > 0 and not player_entries[p_id] and is_valid_player(p_id) then
+            if #name > 0 and not player_entries[p_id] then
                 pcall(create_player_menu, p_id, name)
             end
         end
