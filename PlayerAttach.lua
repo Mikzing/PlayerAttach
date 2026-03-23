@@ -18,7 +18,7 @@
 --
 
 local SCRIPT_NAME = 'Player Attach'
-local SCRIPT_VERSION = '2.1.0'
+local SCRIPT_VERSION = '2.2.0'
 
 -----------------------------------------------------------------------
 -- Permission check
@@ -326,48 +326,9 @@ detach_btn:event(menu.event.click, function()
 end)
 
 -----------------------------------------------------------------------
--- Try to create a float slider. Tries multiple API patterns since
--- different Lexis versions support different methods.
--- Returns the slider object or nil if all attempts fail.
------------------------------------------------------------------------
-local function try_create_slider(parent, label, fmt_str, min_val, max_val, step)
-    -- Attempt 1: number_float with menu.type.scroll + fmt
-    local ok1, slider1 = pcall(function()
-        local s = parent:number_float(label, menu.type.scroll)
-        s:fmt(fmt_str, min_val, max_val, step)
-        return s
-    end)
-    if ok1 and slider1 then return slider1 end
-
-    -- Attempt 2: number_float with menu.type.scroll, no fmt
-    local ok2, slider2 = pcall(function()
-        return parent:number_float(label, menu.type.scroll)
-    end)
-    if ok2 and slider2 then return slider2 end
-
-    -- Attempt 3: number_float without type argument
-    local ok3, slider3 = pcall(function()
-        return parent:number_float(label)
-    end)
-    if ok3 and slider3 then return slider3 end
-
-    -- Attempt 4: slider (some menus use this instead)
-    local ok4, slider4 = pcall(function()
-        return parent:slider(label, min_val, max_val, 0.0, step)
-    end)
-    if ok4 and slider4 then return slider4 end
-
-    -- Attempt 5: slider_float
-    local ok5, slider5 = pcall(function()
-        return parent:slider_float(label, min_val, max_val, 0.0, step)
-    end)
-    if ok5 and slider5 then return slider5 end
-
-    return nil
-end
-
------------------------------------------------------------------------
 -- Create submenu for one player with full controls.
+-- Uses button-based +/- controls for position since Lexis does not
+-- support number_float / slider / slider_float.
 -----------------------------------------------------------------------
 local function create_player_menu(pid, pname)
     local p_menu = root:submenu(pname)
@@ -376,11 +337,24 @@ local function create_player_menu(pid, pname)
     -- Track IMMEDIATELY — prevents duplicate submenus
     player_entries[pid] = { menu = p_menu, name = pname }
 
-    -- Shared offset state (used by presets and attach button)
+    -- Current offset values
     local offset = { x = 0.0, y = 0.0, z = 0.0, pitch = 0.0, roll = 0.0, yaw = 0.0 }
 
-    -- Slider references (nil if creation fails)
-    local sliders = {}
+    -- Step size: 0 = fine (0.1), 1 = medium (0.5), 2 = coarse (1.0)
+    local step_mode = 0
+    local step_sizes = { 0.1, 0.5, 1.0 }
+    local step_names = { 'Fine (0.1)', 'Medium (0.5)', 'Coarse (1.0)' }
+    local rot_step_sizes = { 5.0, 15.0, 45.0 }
+    local rot_step_names = { 'Fine (5)', 'Medium (15)', 'Coarse (45)' }
+
+    -- Helper: reattach with current offsets if already attached to this player
+    local function reattach_if_active()
+        if not attached_vehicle then return end
+        if attached_player_name ~= pname then return end
+        pcall(do_attach, attached_vehicle,
+            offset.x, offset.y, offset.z,
+            offset.pitch, offset.roll, offset.yaw)
+    end
 
     --------------------------------------------------------------------
     -- PRESETS
@@ -402,13 +376,6 @@ local function create_player_menu(pid, pname)
             offset.roll = preset[6]
             offset.yaw = preset[7]
 
-            if sliders.sx then sliders.sx.value = preset[2] end
-            if sliders.sy then sliders.sy.value = preset[3] end
-            if sliders.sz then sliders.sz.value = preset[4] end
-            if sliders.sp then sliders.sp.value = preset[5] end
-            if sliders.srl then sliders.srl.value = preset[6] end
-            if sliders.sy_rot then sliders.sy_rot.value = preset[7] end
-
             if do_attach(veh, preset[2], preset[3], preset[4], preset[5], preset[6], preset[7]) then
                 attached_player_name = pname
                 safe_notify('Attached to ' .. pname .. ' (' .. preset[1] .. ')')
@@ -428,14 +395,7 @@ local function create_player_menu(pid, pname)
             return
         end
 
-        local x = sliders.sx and sliders.sx.value or offset.x
-        local y = sliders.sy and sliders.sy.value or offset.y
-        local z = sliders.sz and sliders.sz.value or offset.z
-        local p = sliders.sp and sliders.sp.value or offset.pitch
-        local r = sliders.srl and sliders.srl.value or offset.roll
-        local yw = sliders.sy_rot and sliders.sy_rot.value or offset.yaw
-
-        if do_attach(veh, x, y, z, p, r, yw) then
+        if do_attach(veh, offset.x, offset.y, offset.z, offset.pitch, offset.roll, offset.yaw) then
             attached_player_name = pname
             safe_notify('Attached to ' .. pname)
         end
@@ -472,56 +432,54 @@ local function create_player_menu(pid, pname)
     end)
 
     --------------------------------------------------------------------
-    -- POSITION SLIDERS — each created individually with fallbacks
+    -- STEP SIZE toggle
     --------------------------------------------------------------------
-    sliders.sx = try_create_slider(p_menu, 'Left / Right', '%.2f', -15.0, 15.0, 0.05)
-    sliders.sy = try_create_slider(p_menu, 'Front / Back', '%.2f', -15.0, 15.0, 0.05)
-    sliders.sz = try_create_slider(p_menu, 'Up / Down', '%.2f', -15.0, 15.0, 0.05)
+    local step_btn = p_menu:button('Step: Fine (0.1)')
+    step_btn:tooltip('Click to cycle step size: Fine / Medium / Coarse')
+    step_btn:event(menu.event.click, function()
+        step_mode = (step_mode + 1) % 3
+        safe_notify('Step: ' .. step_names[step_mode + 1] .. ' | Rotation: ' .. rot_step_names[step_mode + 1])
+    end)
 
     --------------------------------------------------------------------
-    -- ROTATION SLIDERS
+    -- POSITION CONTROLS — button-based +/- for each axis
     --------------------------------------------------------------------
-    sliders.sp = try_create_slider(p_menu, 'Pitch', '%.1f', -360.0, 360.0, 1.0)
-    sliders.srl = try_create_slider(p_menu, 'Roll', '%.1f', -360.0, 360.0, 1.0)
-    sliders.sy_rot = try_create_slider(p_menu, 'Yaw', '%.1f', -360.0, 360.0, 1.0)
+    -- Helper to create a +/- pair for an axis
+    local function make_axis(axis_key, label_minus, label_plus, is_rotation)
+        local btn_minus = p_menu:button(label_minus)
+        btn_minus:event(menu.event.click, function()
+            local s = is_rotation and rot_step_sizes[step_mode + 1] or step_sizes[step_mode + 1]
+            offset[axis_key] = offset[axis_key] - s
+            reattach_if_active()
+            safe_notify(axis_key .. ': ' .. string.format('%.2f', offset[axis_key]))
+        end)
 
-    --------------------------------------------------------------------
-    -- Live update on slider change (only for sliders that exist)
-    --------------------------------------------------------------------
-    local function live_update()
-        if not attached_vehicle then return end
-        if attached_player_name ~= pname then return end
-        local x = sliders.sx and sliders.sx.value or offset.x
-        local y = sliders.sy and sliders.sy.value or offset.y
-        local z = sliders.sz and sliders.sz.value or offset.z
-        local p = sliders.sp and sliders.sp.value or offset.pitch
-        local r = sliders.srl and sliders.srl.value or offset.roll
-        local yw = sliders.sy_rot and sliders.sy_rot.value or offset.yaw
-        pcall(do_attach, attached_vehicle, x, y, z, p, r, yw)
+        local btn_plus = p_menu:button(label_plus)
+        btn_plus:event(menu.event.click, function()
+            local s = is_rotation and rot_step_sizes[step_mode + 1] or step_sizes[step_mode + 1]
+            offset[axis_key] = offset[axis_key] + s
+            reattach_if_active()
+            safe_notify(axis_key .. ': ' .. string.format('%.2f', offset[axis_key]))
+        end)
     end
 
-    for _, key in ipairs({'sx', 'sy', 'sz', 'sp', 'srl', 'sy_rot'}) do
-        if sliders[key] then
-            pcall(function()
-                sliders[key]:event(menu.event.change, function() live_update() end)
-            end)
-        end
-    end
+    make_axis('x',     '< Left',       'Right >',      false)
+    make_axis('y',     '< Back',       'Front >',      false)
+    make_axis('z',     '< Down',       'Up >',         false)
+    make_axis('pitch', '< Pitch Down', 'Pitch Up >',   true)
+    make_axis('roll',  '< Roll Left',  'Roll Right >', true)
+    make_axis('yaw',   '< Yaw Left',   'Yaw Right >',  true)
 
     --------------------------------------------------------------------
-    -- RESET SLIDERS button
+    -- RESET OFFSETS button
     --------------------------------------------------------------------
-    local reset_btn = p_menu:button('Reset Sliders')
-    reset_btn:tooltip('Reset all offsets to 0')
+    local reset_btn = p_menu:button('Reset Offsets')
+    reset_btn:tooltip('Reset all position and rotation to 0')
     reset_btn:event(menu.event.click, function()
         offset.x = 0.0; offset.y = 0.0; offset.z = 0.0
         offset.pitch = 0.0; offset.roll = 0.0; offset.yaw = 0.0
-        for _, key in ipairs({'sx', 'sy', 'sz', 'sp', 'srl', 'sy_rot'}) do
-            if sliders[key] then
-                pcall(function() sliders[key].value = 0.0 end)
-            end
-        end
-        safe_notify('Sliders reset')
+        reattach_if_active()
+        safe_notify('Offsets reset to 0')
     end)
 
     return true
