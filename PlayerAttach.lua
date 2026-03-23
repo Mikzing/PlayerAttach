@@ -18,7 +18,7 @@
 --
 
 local SCRIPT_NAME = 'Player Attach'
-local SCRIPT_VERSION = '1.6.0'
+local SCRIPT_VERSION = '1.7.0'
 
 -----------------------------------------------------------------------
 -- Permission check
@@ -515,14 +515,20 @@ local function refresh_players()
         if ok_id and id_val then my_id = id_val end
     end
 
-    -- Build set of current valid players: pid -> name
+    -- Build set of current VALID players: pid -> name
+    -- players.list() returns ALL 32 GTA slots, most are empty.
+    -- Filter out empty/invalid slots by checking the name.
     local current = {}
     for _, player in ipairs(player_list) do
         local p_ok, p_id, p_name = pcall(function()
-            return player.id, tostring(player.name or 'Unknown')
+            return player.id, player.name
         end)
-        if p_ok and p_id and p_id ~= my_id then
-            current[p_id] = p_name
+        if p_ok and p_id and p_id ~= my_id and p_name then
+            local name_str = tostring(p_name)
+            -- Skip empty slots: no name, blank name, or "Invalid" placeholder
+            if name_str ~= '' and name_str ~= 'Invalid' and name_str ~= 'Unknown' and #name_str > 0 then
+                current[p_id] = name_str
+            end
         end
     end
 
@@ -578,12 +584,4 @@ util.create_thread(function()
     end
 end)
 
------------------------------------------------------------------------
--- Initial load — one refresh on startup
------------------------------------------------------------------------
-util.create_thread(function()
-    util.yield(2000)
-    pcall(refresh_players)
-end)
-
-safe_notify('v' .. SCRIPT_VERSION .. ' loaded', { icon = notify.icon.info })
+safe_notify('v' .. SCRIPT_VERSION .. ' loaded — click Refresh Players to populate', { icon = notify.icon.info })
