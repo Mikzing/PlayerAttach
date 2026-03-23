@@ -233,6 +233,8 @@ util.create_thread(function()
 end)
 
 -- ─── Re-attach thread ──────────────────────────────────────────────
+-- Only handles re-attachment if the entity becomes detached unexpectedly.
+-- Player leave detection is handled by Event.PLAYER_LEFT above.
 util.create_thread(function()
     while true do
         util.yield(200)
@@ -240,26 +242,6 @@ util.create_thread(function()
 
         local entity = get_my_entity()
         if not entity then goto next end
-
-        -- Only detach if the player left (not just out of streaming range)
-        if attached_player_name then
-            local still_here = false
-            for pid, entry in pairs(player_entries) do
-                if entry.name == attached_player_name and player_has_ped(pid) then
-                    still_here = true
-                    break
-                end
-            end
-            if not still_here then
-                attach_state.active  = false
-                attach_state.vehicle = nil
-                attached_vehicle     = nil
-                attached_player_name = nil
-                set_idle_anims(true)
-                safe_notify('Player left — detached', { icon = notify.icon.hazard })
-                goto next
-            end
-        end
 
         if not is_attached(entity) then
             raw_attach(entity, attach_state.vehicle,
@@ -547,37 +529,55 @@ det_btn:event(menu.event.click, function()
     safe_notify('Detached from ' .. name)
 end)
 
--- ─── Refresh Players ────────────────────────────────────────────────
-local refresh_requested = false
-
+-- ─── Refresh Players (manual fallback) ─────────────────────────────
 local ref_btn = root:button('Refresh Players')
-ref_btn:tooltip('Scan the session for players and update the list')
+ref_btn:tooltip('Manually rescan the session (events handle this automatically)')
 ref_btn:event(menu.event.click, function()
-    refresh_requested = true
+    pcall(refresh_players, false)
 end)
 
-util.create_thread(function()
-    while true do
-        util.yield(250)
-        if refresh_requested then
-            refresh_requested = false
-            pcall(refresh_players, false)
+-- ─── Event-driven player tracking ──────────────────────────────────
+-- Subscribe to PLAYER_JOINED — automatically add new players to the menu
+pcall(function()
+    events.subscribe(Event.PLAYER_JOINED, function(data)
+        local ok, p = pcall(function() return data.player end)
+        if not ok or not p then return end
+
+        local ok2, pid, pname = pcall(function() return p.id, p.name end)
+        if not ok2 or not pid or not pname then return end
+
+        local name = tostring(pname)
+        if #name == 0 or player_entries[pid] then return end
+
+        pcall(create_player_menu, pid, name)
+    end)
+end)
+
+-- Subscribe to PLAYER_LEFT — automatically remove departed players
+pcall(function()
+    events.subscribe(Event.PLAYER_LEFT, function(data)
+        local ok, p = pcall(function() return data.player end)
+        if not ok or not p then return end
+
+        local ok2, pid = pcall(function() return p.id end)
+        if not ok2 or not pid then return end
+
+        local entry = player_entries[pid]
+        if not entry then return end
+
+        -- If we were attached to this player, detach
+        if attached_player_name and entry.name == attached_player_name then
+            do_detach()
+            safe_notify(entry.name .. ' left — detached', { icon = notify.icon.hazard })
         end
-    end
+
+        remove_player(pid)
+    end)
 end)
 
--- ─── Auto-scan thread ──────────────────────────────────────────────
--- Every 3 seconds: remove departed players AND add newly joined players
-util.create_thread(function()
-    -- Small initial delay so the menu is fully built
-    util.yield(1000)
-
-    while true do
-        -- Run the full refresh silently (adds new + removes departed)
-        pcall(refresh_players, true)
-        util.yield(3000)
-    end
-end)
+-- ─── Initial player scan ───────────────────────────────────────────
+-- Populate the menu with players already in the session when the script loads
+pcall(refresh_players, true)
 
 -- ─── Ready ──────────────────────────────────────────────────────────
 safe_notify('v' .. SCRIPT_VERSION .. ' loaded', { icon = notify.icon.info })
