@@ -235,7 +235,7 @@ end)
 -- Menu setup
 -----------------------------------------------------------------------
 local root = menu.root()
-local BASE_SIZE = 2 -- detach button + refresh button
+local player_menus = {} -- track created player submenus for cleanup
 
 -----------------------------------------------------------------------
 -- Quick detach + refresh at top
@@ -272,6 +272,7 @@ local function add_player_menu(player)
     end
 
     local p_menu = root:submenu(label)
+    table.insert(player_menus, p_menu)
     local pid = player.id
     local pname = player.name
 
@@ -429,11 +430,11 @@ end
 -- Build / rebuild the full player list at root level
 -----------------------------------------------------------------------
 function rebuild_player_list()
-    local resize_ok = pcall(function() root:resize(BASE_SIZE) end)
-    if not resize_ok then
-        -- Resize failed (menu may be navigated into a child), skip this rebuild
-        return
+    -- Delete all existing player submenus
+    for _, m in ipairs(player_menus) do
+        pcall(function() m:delete() end)
     end
+    player_menus = {}
 
     local ok, player_list = pcall(players.list)
     if not ok or not player_list then
