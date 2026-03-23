@@ -467,13 +467,21 @@ local function refresh_players()
         remove_player(pid)
     end
 
+    -- Build a set of names already in the menu (catches orphaned entries
+    -- where safe_delete_menu failed but the pid was removed from the table)
+    local existing_names = {}
+    for _, entry in pairs(player_entries) do
+        existing_names[entry.name] = true
+    end
+
     -- Add new players
     for _, p in ipairs(player_list) do
         local p_ok, p_id, p_name = pcall(function() return p.id, p.name end)
         if p_ok and p_id and p_id ~= my_id and p_name then
             local name = tostring(p_name)
-            if #name > 0 and not player_entries[p_id] and player_has_ped(p_id) then
+            if #name > 0 and not player_entries[p_id] and not existing_names[name] and player_has_ped(p_id) then
                 pcall(create_player_menu, p_id, name)
+                existing_names[name] = true
             end
         end
     end
