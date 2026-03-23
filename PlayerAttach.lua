@@ -13,12 +13,12 @@
 -- ┃              by Mikz                            ┃
 -- ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
 --
--- Player Attach v4.0.0 — Lexis Script
+-- Player Attach v4.1.0 — Lexis Script
 -- Attach yourself to any player's vehicle
 --
 
 local SCRIPT_NAME    = 'Player Attach'
-local SCRIPT_VERSION = '4.0.0'
+local SCRIPT_VERSION = '4.1.0'
 
 -- ─── Permission check ───────────────────────────────────────────────
 local perm_ok, perm_val = pcall(function()
@@ -97,14 +97,6 @@ local function get_player_vehicle(pid)
     return ok2 and v or nil
 end
 
--- Light check: player exists in session with a ped handle (no native calls)
-local function player_has_ped(pid)
-    local ok, t = pcall(players.get, pid)
-    if not ok or not t then return false end
-    local ok2, ped = pcall(function() return t.ped end)
-    return ok2 and ped and ped ~= 0
-end
-
 -- ─── Ped idle freeze ────────────────────────────────────────────────
 local function set_idle_anims(enabled)
     local ped = get_my_ped()
@@ -114,40 +106,37 @@ local function set_idle_anims(enabled)
     call_native(N_SET_PED_CAN_PLAY_AMBIENT_BASE_ANIMS, ped, v)
 end
 
--- ─── Presets { name, tooltip, x, y, z, pitch, yaw } ────────────────
+-- ─── Presets { name, tooltip, x, y, z, yaw } ───────────────────────
 local presets = {
-    { 'Roof',         'Stand on top of the vehicle',             0.0,   0.0,  1.2,  0.0,   0.0 },
-    { 'Hood',         'Stand on the front hood',                 0.0,   2.5,  0.8,  0.0,   0.0 },
-    { 'Trunk',        'Stand on the back trunk, facing rear',    0.0,  -2.5,  0.8,  0.0, 180.0 },
-    { 'Left Side',    'Hang off the left side, facing outward', -1.2,   0.0,  0.5,  0.0, -90.0 },
-    { 'Right Side',   'Hang off the right side, facing outward', 1.2,   0.0,  0.5,  0.0,  90.0 },
-    { 'Hanging Back', 'Cling to the rear bumper',                0.0,  -2.0,  0.2,  0.0, 180.0 },
+    { 'Roof',         'Stand on top of the vehicle',             0.0,   0.0,  1.2,   0.0 },
+    { 'Hood',         'Stand on the front hood',                 0.0,   2.5,  0.8,   0.0 },
+    { 'Trunk',        'Stand on the back trunk, facing rear',    0.0,  -2.5,  0.8, 180.0 },
+    { 'Left Side',    'Hang off the left side, facing outward', -1.2,   0.0,  0.5, -90.0 },
+    { 'Right Side',   'Hang off the right side, facing outward', 1.2,   0.0,  0.5,  90.0 },
+    { 'Hanging Back', 'Cling to the rear bumper',                0.0,  -2.0,  0.2, 180.0 },
 }
 
 -- ─── Attachment state ───────────────────────────────────────────────
 local attached_vehicle     = nil
 local attached_player_name = nil
-local offset = { x = 0.0, y = 0.0, z = 0.0, pitch = 0.0, yaw = 0.0 }
+local offset = { x = 0.0, y = 0.0, z = 0.0, yaw = 0.0 }
 
 local attach_state = {
     active  = false,
     vehicle = nil,
     x = 0.0, y = 0.0, z = 0.0,
-    pitch = 0.0, yaw = 0.0,
+    yaw = 0.0,
 }
 
-local function raw_attach(entity, veh, x, y, z, pitch, yaw)
-    -- Rotation via native params: xRot=pitch, yRot=0, zRot=yaw
-    -- Note: GTA V ignores pitch (xRot) for peds (engine keeps them upright)
-    -- but yaw (zRot) works correctly for facing direction.
+local function raw_attach(entity, veh, x, y, z, yaw)
     call_native(N_ATTACH_ENTITY_TO_ENTITY,
         entity, veh, 0,
         x + 0.0, y + 0.0, z + 0.0,
-        pitch + 0.0, 0.0, yaw + 0.0,
+        0.0, 0.0, yaw + 0.0,
         0, 1, 1, 0, 2, 1)
 end
 
-local function do_attach(veh, x, y, z, pitch, yaw)
+local function do_attach(veh, x, y, z, yaw)
     local entity = get_my_entity()
     if not entity then safe_notify('Could not get your entity'); return false end
 
@@ -155,14 +144,14 @@ local function do_attach(veh, x, y, z, pitch, yaw)
         call_native(N_DETACH_ENTITY, entity, 1, 1)
     end
 
-    raw_attach(entity, veh, x, y, z, pitch, yaw)
+    raw_attach(entity, veh, x, y, z, yaw)
     set_idle_anims(false)
 
     attached_vehicle     = veh
     attach_state.active  = true
     attach_state.vehicle = veh
     attach_state.x, attach_state.y, attach_state.z = x, y, z
-    attach_state.pitch, attach_state.yaw = pitch, yaw
+    attach_state.yaw = yaw
     return true
 end
 
@@ -170,7 +159,6 @@ local function do_detach()
     attach_state.active  = false
     attach_state.vehicle = nil
 
-    -- Always try to detach the entity, even if our state got out of sync
     local entity = get_my_entity()
     if entity then
         pcall(call_native, N_DETACH_ENTITY, entity, 1, 1)
@@ -184,16 +172,13 @@ end
 local function reattach()
     if not attached_vehicle then return end
     pcall(do_attach, attached_vehicle,
-        offset.x, offset.y, offset.z,
-        offset.pitch, offset.yaw)
+        offset.x, offset.y, offset.z, offset.yaw)
 end
 
 -- ─── Player tracking (forward declaration) ─────────────────────────
 local player_entries = {}  -- pid → { menu, name, sliders }
 
 -- ─── Re-attach thread ──────────────────────────────────────────────
--- Re-attaches if the entity becomes detached unexpectedly.
--- Player leave detection is handled by Event.PLAYER_LEFT.
 util.create_thread(function()
     while true do
         util.yield(200)
@@ -205,7 +190,7 @@ util.create_thread(function()
         if not is_attached(entity) then
             raw_attach(entity, attach_state.vehicle,
                 attach_state.x, attach_state.y, attach_state.z,
-                attach_state.pitch, attach_state.yaw)
+                attach_state.yaw)
             set_idle_anims(false)
         end
 
@@ -221,7 +206,7 @@ if not root then
     return
 end
 
--- ─── Player tracking (continued) ────────────────────────────────────
+-- ─── Menu helpers ───────────────────────────────────────────────────
 local function safe_delete_menu(m)
     if not m then return end
     local ok = pcall(function() m:delete() end)
@@ -232,23 +217,20 @@ end
 local function sync_sliders(entry)
     if not entry or not entry.sliders then return end
     local sl = entry.sliders
-    pcall(function() sl.x.value     = offset.x end)
-    pcall(function() sl.y.value     = offset.y end)
-    pcall(function() sl.z.value     = offset.z end)
-    pcall(function() sl.pitch.value = offset.pitch end)
-    pcall(function() sl.yaw.value   = offset.yaw end)
+    pcall(function() sl.x.value   = offset.x end)
+    pcall(function() sl.y.value   = offset.y end)
+    pcall(function() sl.z.value   = offset.z end)
+    pcall(function() sl.yaw.value = offset.yaw end)
 end
 
 -- ─── Build position controls inside a parent menu ───────────────────
 local function build_position_controls(parent)
-    -- Try sliders first
     local sliders = {}
     local slider_defs = {
-        { 'X  Left / Right', 'x',     -10.0,  10.0, 0.05, '%.2f', 'Move left (-) or right (+)' },
-        { 'Y  Back / Front', 'y',     -10.0,  10.0, 0.05, '%.2f', 'Move backward (-) or forward (+)' },
-        { 'Z  Down / Up',    'z',     -10.0,  10.0, 0.05, '%.2f', 'Move down (-) or up (+)' },
-        { 'Pitch',           'pitch', -180.0, 180.0, 1.0, '%.0f', 'Tilt forward/backward (nod)' },
-        { 'Yaw',             'yaw',   -180.0, 180.0, 1.0, '%.0f', 'Rotate left/right (turn)' },
+        { 'X  Left / Right', 'x',   -10.0,  10.0, 0.05, '%.2f', 'Move left (-) or right (+)' },
+        { 'Y  Back / Front', 'y',   -10.0,  10.0, 0.05, '%.2f', 'Move backward (-) or forward (+)' },
+        { 'Z  Down / Up',    'z',   -10.0,  10.0, 0.05, '%.2f', 'Move down (-) or up (+)' },
+        { 'Yaw',             'yaw', -180.0, 180.0, 1.0, '%.0f', 'Rotate left/right (turn)' },
     }
 
     local slider_count = 0
@@ -270,14 +252,13 @@ local function build_position_controls(parent)
         end
     end
 
-    -- If at least position sliders worked, use them
     if slider_count >= 3 then
         local rst = parent:button('Reset Position')
         rst:tooltip('Reset all offsets back to 0')
         rst:event(menu.event.click, function()
             offset.x, offset.y, offset.z = 0.0, 0.0, 0.0
-            offset.pitch, offset.yaw = 0.0, 0.0
-            for _, key in ipairs({ 'x', 'y', 'z', 'pitch', 'yaw' }) do
+            offset.yaw = 0.0
+            for _, key in ipairs({ 'x', 'y', 'z', 'yaw' }) do
                 if sliders[key] then pcall(function() sliders[key].value = 0.0 end) end
             end
             reattach()
@@ -291,7 +272,7 @@ local function build_position_controls(parent)
         pcall(function() s:delete() end)
     end
 
-    -- Button-based fallback (finer default steps)
+    -- Button-based fallback
     local step_sizes = { 0.01, 0.025, 0.05, 0.1, 0.25 }
     local step_names = { '0.01', '0.025', '0.05', '0.1', '0.25' }
     local rot_steps  = { 0.5, 1.0, 5.0, 15.0, 30.0 }
@@ -307,11 +288,10 @@ local function build_position_controls(parent)
     end)
 
     local axes = {
-        { 'x',     '< Left',      'Right >',     false, 'Move left',          'Move right' },
-        { 'y',     '< Back',      'Front >',     false, 'Move backward',      'Move forward' },
-        { 'z',     '< Down',      'Up >',        false, 'Move down',          'Move up' },
-        { 'pitch', '< Pitch Down','Pitch Up >',  true,  'Tilt forward',       'Tilt backward' },
-        { 'yaw',   '< Yaw Left',  'Yaw Right >', true,  'Turn left',          'Turn right' },
+        { 'x',   '< Left',     'Right >',     false, 'Move left',  'Move right' },
+        { 'y',   '< Back',     'Front >',     false, 'Move back',  'Move forward' },
+        { 'z',   '< Down',     'Up >',        false, 'Move down',  'Move up' },
+        { 'yaw', '< Yaw Left', 'Yaw Right >', true,  'Turn left',  'Turn right' },
     }
     for _, a in ipairs(axes) do
         local key, lbl_neg, lbl_pos, is_rot, tip_neg, tip_pos = a[1], a[2], a[3], a[4], a[5], a[6]
@@ -337,7 +317,7 @@ local function build_position_controls(parent)
     rst:tooltip('Reset all offsets back to 0')
     rst:event(menu.event.click, function()
         offset.x, offset.y, offset.z = 0.0, 0.0, 0.0
-        offset.pitch, offset.yaw = 0.0, 0.0
+        offset.yaw = 0.0
         reattach()
         safe_notify('Position reset')
     end)
@@ -353,19 +333,17 @@ local function create_player_menu(pid, pname)
     local entry = { menu = p_menu, name = pname, sliders = nil }
     player_entries[pid] = entry
 
-    -- Attach with current offset
     local att = p_menu:button('Attach')
     att:tooltip('Attach to ' .. pname .. ' using current position offsets')
     att:event(menu.event.click, function()
         local veh = get_player_vehicle(pid)
         if not veh then safe_notify(pname .. ' is not in a vehicle'); return end
-        if do_attach(veh, offset.x, offset.y, offset.z, offset.pitch, offset.yaw) then
+        if do_attach(veh, offset.x, offset.y, offset.z, offset.yaw) then
             attached_player_name = pname
             safe_notify('Attached to ' .. pname)
         end
     end)
 
-    -- Detach
     local det = p_menu:button('Detach')
     det:tooltip('Detach from ' .. pname)
     det:event(menu.event.click, function()
@@ -373,7 +351,6 @@ local function create_player_menu(pid, pname)
         safe_notify('Detached from ' .. pname)
     end)
 
-    -- Presets sub-submenu
     local presets_sub = p_menu:submenu('Presets')
     if presets_sub then
         presets_sub:tooltip('Quick-attach to common positions on the vehicle')
@@ -385,10 +362,10 @@ local function create_player_menu(pid, pname)
                 if not veh then safe_notify(pname .. ' is not in a vehicle'); return end
 
                 offset.x, offset.y, offset.z = p[3], p[4], p[5]
-                offset.pitch, offset.yaw = p[6], p[7]
+                offset.yaw = p[6]
                 sync_sliders(entry)
 
-                if do_attach(veh, p[3], p[4], p[5], p[6], p[7]) then
+                if do_attach(veh, p[3], p[4], p[5], p[6]) then
                     attached_player_name = pname
                     safe_notify('Attached to ' .. pname .. ' (' .. p[1] .. ')')
                 end
@@ -396,7 +373,6 @@ local function create_player_menu(pid, pname)
         end
     end
 
-    -- Adjust Position sub-submenu
     local pos_sub = p_menu:submenu('Adjust Position')
     if pos_sub then
         pos_sub:tooltip('Fine-tune your X/Y/Z position and rotation on the vehicle')
@@ -414,6 +390,15 @@ local function remove_player(pid)
     player_entries[pid] = nil
 end
 
+-- Get my player ID, returns -1 if unknown
+local function get_my_id()
+    local ok, me = pcall(players.me)
+    if not ok or not me then return -1 end
+    local ok2, v = pcall(function() return me.id end)
+    return (ok2 and v) and v or -1
+end
+
+-- Full session scan: add new players, remove departed ones
 local function refresh_players(silent)
     local ok, player_list = pcall(players.list)
     if not ok or not player_list then
@@ -421,53 +406,48 @@ local function refresh_players(silent)
         return
     end
 
-    local ok_me, my = pcall(players.me)
-    local my_id = -1
-    if ok_me and my then
-        local ok_id, v = pcall(function() return my.id end)
-        if ok_id and v then my_id = v end
-    end
+    local my_id = get_my_id()
 
-    -- All IDs currently in the session
+    -- Build set of IDs currently in session
     local session_ids = {}
     for _, p in ipairs(player_list) do
         local p_ok, p_id = pcall(function() return p.id end)
-        if p_ok and p_id and p_id ~= my_id then session_ids[p_id] = true end
+        if p_ok and p_id and p_id ~= my_id then
+            session_ids[p_id] = p
+        end
     end
 
-    -- Remove departed players (collect first to avoid modifying table during iteration)
+    -- Remove departed players
     local to_remove = {}
     for pid, entry in pairs(player_entries) do
         if not session_ids[pid] then
             to_remove[#to_remove + 1] = pid
-            if attached_player_name and entry.name == attached_player_name then
-                do_detach()
-                safe_notify(entry.name .. ' left — detached', { icon = notify.icon.hazard })
-            end
         end
     end
     for _, pid in ipairs(to_remove) do
+        local entry = player_entries[pid]
+        if entry and attached_player_name and entry.name == attached_player_name then
+            do_detach()
+            safe_notify(entry.name .. ' left — detached', { icon = notify.icon.hazard })
+        end
         remove_player(pid)
     end
 
-    -- Build a set of names already in the menu (catches orphaned entries
-    -- where safe_delete_menu failed but the pid was removed from the table)
+    -- Add new players (no ped check — they might not be streamed in yet)
     local existing_names = {}
     for _, entry in pairs(player_entries) do
         existing_names[entry.name] = true
     end
 
-    -- Add new players
-    local added = 0
-    for _, p in ipairs(player_list) do
-        local p_ok, p_id, p_name = pcall(function() return p.id, p.name end)
-        if p_ok and p_id and p_id ~= my_id and p_name then
-            local name = tostring(p_name)
-            if #name > 0 and not player_entries[p_id] and not existing_names[name] and player_has_ped(p_id) then
-                if pcall(create_player_menu, p_id, name) then
-                    added = added + 1
+    for pid, p in pairs(session_ids) do
+        if not player_entries[pid] then
+            local n_ok, pname = pcall(function() return p.name end)
+            if n_ok and pname then
+                local name = tostring(pname)
+                if #name > 0 and not existing_names[name] then
+                    pcall(create_player_menu, pid, name)
+                    existing_names[name] = true
                 end
-                existing_names[name] = true
             end
         end
     end
@@ -488,54 +468,54 @@ det_btn:event(menu.event.click, function()
     safe_notify('Detached from ' .. name)
 end)
 
--- ─── Refresh Players (manual fallback) ─────────────────────────────
+-- ─── Refresh Players (manual) ──────────────────────────────────────
 local ref_btn = root:button('Refresh Players')
-ref_btn:tooltip('Manually rescan the session (events handle this automatically)')
+ref_btn:tooltip('Manually rescan the session')
 ref_btn:event(menu.event.click, function()
     pcall(refresh_players, false)
 end)
 
 -- ─── Event-driven player tracking ──────────────────────────────────
--- Subscribe to PLAYER_JOINED — automatically add new players to the menu
 pcall(function()
     events.subscribe(Event.PLAYER_JOINED, function(data)
-        local ok, p = pcall(function() return data.player end)
-        if not ok or not p then return end
-
-        local ok2, pid, pname = pcall(function() return p.id, p.name end)
-        if not ok2 or not pid or not pname then return end
-
+        local p = data and data.player
+        if not p then return end
+        local ok, pid, pname = pcall(function() return p.id, p.name end)
+        if not ok or not pid or not pname then return end
         local name = tostring(pname)
-        if #name == 0 or player_entries[pid] then return end
-
-        pcall(create_player_menu, pid, name)
+        if #name > 0 and not player_entries[pid] then
+            pcall(create_player_menu, pid, name)
+        end
     end)
 end)
 
--- Subscribe to PLAYER_LEFT — automatically remove departed players
 pcall(function()
     events.subscribe(Event.PLAYER_LEFT, function(data)
-        local ok, p = pcall(function() return data.player end)
-        if not ok or not p then return end
-
-        local ok2, pid = pcall(function() return p.id end)
-        if not ok2 or not pid then return end
-
+        local p = data and data.player
+        if not p then return end
+        local ok, pid = pcall(function() return p.id end)
+        if not ok or not pid then return end
         local entry = player_entries[pid]
         if not entry then return end
-
-        -- If we were attached to this player, detach
         if attached_player_name and entry.name == attached_player_name then
             do_detach()
             safe_notify(entry.name .. ' left — detached', { icon = notify.icon.hazard })
         end
-
         remove_player(pid)
     end)
 end)
 
+-- ─── Polling fallback ──────────────────────────────────────────────
+-- Events are preferred but polling ensures we never miss a join/leave
+util.create_thread(function()
+    util.yield(1000)
+    while true do
+        pcall(refresh_players, true)
+        util.yield(3000)
+    end
+end)
+
 -- ─── Initial player scan ───────────────────────────────────────────
--- Populate the menu with players already in the session when the script loads
 pcall(refresh_players, true)
 
 -- ─── Ready ──────────────────────────────────────────────────────────
