@@ -516,22 +516,47 @@ util.create_thread(function()
 end)
 
 -- ─── Cleanup thread ────────────────────────────────────────────────
+-- Checks the live player list every 3 seconds and removes anyone who left
 util.create_thread(function()
     while true do
-        util.yield(5000)
-        local to_remove = {}
-        for pid, entry in pairs(player_entries) do
-            if not player_has_ped(pid) then
-                to_remove[#to_remove + 1] = pid
-                if attached_player_name and entry.name == attached_player_name then
-                    do_detach()
-                    safe_notify(entry.name .. ' left — detached', { icon = notify.icon.hazard })
+        util.yield(3000)
+
+        -- Get the authoritative session list
+        local ok, player_list = pcall(players.list)
+        if not ok or not player_list then goto skip end
+
+        do
+            local ok_me, my = pcall(players.me)
+            local my_id = -1
+            if ok_me and my then
+                local ok_id, v = pcall(function() return my.id end)
+                if ok_id and v then my_id = v end
+            end
+
+            -- Build set of IDs currently in session
+            local session_ids = {}
+            for _, p in ipairs(player_list) do
+                local p_ok, p_id = pcall(function() return p.id end)
+                if p_ok and p_id and p_id ~= my_id then session_ids[p_id] = true end
+            end
+
+            -- Remove anyone no longer in the session
+            local to_remove = {}
+            for pid, entry in pairs(player_entries) do
+                if not session_ids[pid] then
+                    to_remove[#to_remove + 1] = pid
+                    if attached_player_name and entry.name == attached_player_name then
+                        do_detach()
+                        safe_notify(entry.name .. ' left — detached', { icon = notify.icon.hazard })
+                    end
                 end
             end
+            for _, pid in ipairs(to_remove) do
+                remove_player(pid)
+            end
         end
-        for _, pid in ipairs(to_remove) do
-            remove_player(pid)
-        end
+
+        ::skip::
     end
 end)
 
