@@ -319,12 +319,12 @@ local function add_player_menu(player)
     end
 
     -- Live update on any slider change
-    sx:event(menu.event.click, function() live_update() end)
-    sy:event(menu.event.click, function() live_update() end)
-    sz:event(menu.event.click, function() live_update() end)
-    sp:event(menu.event.click, function() live_update() end)
-    srl:event(menu.event.click, function() live_update() end)
-    sy_rot:event(menu.event.click, function() live_update() end)
+    sx:event(menu.event.change, function() live_update() end)
+    sy:event(menu.event.change, function() live_update() end)
+    sz:event(menu.event.change, function() live_update() end)
+    sp:event(menu.event.change, function() live_update() end)
+    srl:event(menu.event.change, function() live_update() end)
+    sy_rot:event(menu.event.change, function() live_update() end)
 
     --------------------------------------------------------------------
     -- Presets
@@ -413,8 +413,8 @@ local function add_player_menu(player)
 
     p_menu:toggle('Disable Collision')
         :tooltip('Clip through the vehicle instead of colliding with it')
-        :event(menu.event.click, function(opt)
-            collision_disabled = opt.value
+        :event(menu.event.change, function(val)
+            collision_disabled = val
             if attached_vehicle and collision_disabled then
                 local entity = get_my_entity()
                 if entity then
@@ -429,7 +429,11 @@ end
 -- Build / rebuild the full player list at root level
 -----------------------------------------------------------------------
 function rebuild_player_list()
-    root:resize(BASE_SIZE)
+    local resize_ok = pcall(function() root:resize(BASE_SIZE) end)
+    if not resize_ok then
+        -- Resize failed (menu may be navigated into a child), skip this rebuild
+        return
+    end
 
     local ok, player_list = pcall(players.list)
     if not ok or not player_list then
@@ -458,9 +462,18 @@ events.subscribe(events.event.player_join, function(data)
 end)
 
 events.subscribe(events.event.player_leave, function(data)
-    if attached_player_name and data.player and data.player.name == attached_player_name then
+    local left_name = nil
+    if data then
+        if data.player and data.player.name then
+            left_name = data.player.name
+        elseif data.name then
+            left_name = data.name
+        end
+    end
+
+    if attached_player_name and left_name and left_name == attached_player_name then
         do_detach()
-        notify.push(SCRIPT_NAME, 'Auto-detached: ' .. data.player.name .. ' left', { icon = notify.icon.hazard })
+        notify.push(SCRIPT_NAME, 'Auto-detached: ' .. left_name .. ' left', { icon = notify.icon.hazard })
     end
 
     rebuild_player_list()
@@ -469,7 +482,7 @@ end)
 -----------------------------------------------------------------------
 -- Initial build + startup
 -----------------------------------------------------------------------
-util.create_job(function()
+util.create_thread(function()
     util.yield(2000)
     rebuild_player_list()
 end)
