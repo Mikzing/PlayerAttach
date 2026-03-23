@@ -147,13 +147,18 @@ end
 local function do_attach(veh, x, y, z, pitch, roll, yaw)
     local entity = get_my_entity()
     if not entity then safe_notify('Could not get your entity'); return false end
-    if not entity_exists(veh) then safe_notify('Target vehicle no longer exists'); return false end
 
     if is_attached(entity) then
         call_native(N_DETACH_ENTITY, entity, 1, 1)
     end
 
     raw_attach(entity, veh, x, y, z, pitch, roll, yaw)
+
+    -- Verify it actually worked (vehicle may not be streamed in)
+    if not is_attached(entity) then
+        safe_notify('Failed — player may be too far away', { icon = notify.icon.hazard })
+        return false
+    end
     set_idle_anims(false)
 
     attached_vehicle     = veh
@@ -194,14 +199,24 @@ util.create_thread(function()
         local entity = get_my_entity()
         if not entity then goto next end
 
-        if not entity_exists(attach_state.vehicle) then
-            attach_state.active  = false
-            attach_state.vehicle = nil
-            attached_vehicle     = nil
-            attached_player_name = nil
-            set_idle_anims(true)
-            safe_notify('Vehicle gone — detached', { icon = notify.icon.hazard })
-            goto next
+        -- Only detach if the player left (not just out of streaming range)
+        if attached_player_name then
+            local still_here = false
+            for pid, entry in pairs(player_entries) do
+                if entry.name == attached_player_name and player_has_ped(pid) then
+                    still_here = true
+                    break
+                end
+            end
+            if not still_here then
+                attach_state.active  = false
+                attach_state.vehicle = nil
+                attached_vehicle     = nil
+                attached_player_name = nil
+                set_idle_anims(true)
+                safe_notify('Player left — detached', { icon = notify.icon.hazard })
+                goto next
+            end
         end
 
         if not is_attached(entity) then
