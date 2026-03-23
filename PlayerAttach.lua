@@ -18,14 +18,17 @@
 --
 
 local SCRIPT_NAME = 'Player Attach'
-local SCRIPT_VERSION = '1.3.0'
+local SCRIPT_VERSION = '1.4.0'
 
 -----------------------------------------------------------------------
 -- Permission check
 -----------------------------------------------------------------------
-if this.permissions() & permission.natives == 0 then
-    notify.push(SCRIPT_NAME, 'Natives permission required. Exiting.', { icon = notify.icon.hazard })
-    this.unload()
+local perm_ok, perm_val = pcall(function()
+    return this.permissions() & permission.natives
+end)
+if not perm_ok or not perm_val or perm_val == 0 then
+    pcall(notify.push, SCRIPT_NAME, 'Natives permission required. Exiting.', { icon = notify.icon.hazard })
+    pcall(this.unload)
     return
 end
 
@@ -62,29 +65,24 @@ local function native_to_bool(result)
     if t == 'number' then
         return result ~= 0
     end
-    -- Handle table-like returns (some menu versions return { bool = ..., int = ... })
     if t == 'table' then
-        if result.bool ~= nil then
-            return result.bool
-        end
-        if result.int ~= nil then
-            return result.int ~= 0
-        end
+        if result.bool ~= nil then return result.bool end
+        if result.int ~= nil then return result.int ~= 0 end
         return false
     end
-    -- Handle userdata / cdata: try common accessors safely
-    if t == 'userdata' or t == 'cdata' then
-        local ok1, val1 = pcall(function() return result:__tointeger() end)
-        if ok1 and val1 ~= nil then return val1 ~= 0 end
-        local ok2, val2 = pcall(function() return result.bool end)
-        if ok2 and type(val2) == 'boolean' then return val2 end
-        local ok3, val3 = pcall(function() return result.int end)
-        if ok3 and type(val3) == 'number' then return val3 ~= 0 end
-        local ok4, val4 = pcall(function() return tonumber(result) end)
-        if ok4 and val4 ~= nil then return val4 ~= 0 end
-        return false
-    end
+    -- Handle userdata / cdata: try accessors safely via pcall
+    local ok1, val1 = pcall(tonumber, result)
+    if ok1 and val1 ~= nil then return val1 ~= 0 end
+    local ok2, val2 = pcall(function() return result.bool end)
+    if ok2 and type(val2) == 'boolean' then return val2 end
     return false
+end
+
+-----------------------------------------------------------------------
+-- Safe notify wrapper — never crashes on bad args
+-----------------------------------------------------------------------
+local function safe_notify(text, opts)
+    pcall(notify.push, SCRIPT_NAME, tostring(text), opts)
 end
 
 -----------------------------------------------------------------------
@@ -93,7 +91,6 @@ end
 local attached_vehicle = nil
 local attached_player_name = nil
 local collision_disabled = false
-local rebuild_pending = false
 
 -- Current attachment parameters (stored for re-attach loop)
 local attach_params = {
@@ -134,11 +131,19 @@ local function get_my_entity()
     if not ok or not me then
         return nil
     end
-    if me.in_vehicle and me.vehicle and me.vehicle ~= 0 then
-        return me.vehicle
-    end
-    if me.ped and me.ped ~= 0 then
-        return me.ped
+    -- Property access on player objects can be metamethod-backed native queries
+    -- that throw if the session state changes. Wrap in pcall.
+    local ok2, result = pcall(function()
+        if me.in_vehicle and me.vehicle and me.vehicle ~= 0 then
+            return me.vehicle
+        end
+        if me.ped and me.ped ~= 0 then
+            return me.ped
+        end
+        return nil
+    end)
+    if ok2 then
+        return result
     end
     return nil
 end
@@ -151,16 +156,17 @@ local function is_entity_attached(entity)
 end
 
 -----------------------------------------------------------------------
--- Core attach (raw, no notifications)
+-- Core attach (raw, no notifications, no yields)
+-- IMPORTANT: This must NEVER call util.yield() because it is invoked
+-- from menu callbacks which are NOT coroutines.
 -----------------------------------------------------------------------
 local function raw_attach(entity, target_vehicle, x, y, z, pitch, roll, yaw)
-    -- Ensure float params are actual floats by adding 0.0
     call_native(N_ATTACH_ENTITY_TO_ENTITY,
         entity,
         target_vehicle,
         0,                              -- boneIndex (int)
-        x + 0.0, y + 0.0, z + 0.0,    -- position offset (float)
-        pitch + 0.0, roll + 0.0, yaw + 0.0, -- rotation offset (float)
+        x + 0.0, y + 0.0, z + 0.0,    -- position offset (force float)
+        pitch + 0.0, roll + 0.0, yaw + 0.0, -- rotation offset (force float)
         1,                              -- p9 (BOOL)
         0,                              -- useSoftPinning (BOOL)
         1,                              -- collision (BOOL)
@@ -172,23 +178,24 @@ end
 
 -----------------------------------------------------------------------
 -- Core functions
+-- IMPORTANT: No util.yield() allowed — these run from menu callbacks.
 -----------------------------------------------------------------------
 local function do_attach(target_vehicle, x, y, z, pitch, roll, yaw)
     local entity = get_my_entity()
     if not entity then
-        notify.push(SCRIPT_NAME, 'Could not get your entity')
+        safe_notify('Could not get your entity')
         return false
     end
 
     if not entity_exists(target_vehicle) then
-        notify.push(SCRIPT_NAME, 'Target vehicle no longer exists')
+        safe_notify('Target vehicle no longer exists')
         return false
     end
 
     -- Detach first if already attached (for live repositioning)
+    -- NO yield here — the engine handles detach+reattach in the same frame fine
     if is_entity_attached(entity) then
         call_native(N_DETACH_ENTITY, entity, 1, 1)
-        util.yield(50)  -- brief pause to let the engine process detach
     end
 
     -- Attach
@@ -230,10 +237,11 @@ end
 -- Persistent re-attach thread
 -- Keeps you attached when animations, ragdoll, etc try to detach.
 -- Runs at a throttled interval (200ms) to avoid stressing the engine.
+-- This IS a coroutine context, so util.yield() is safe here.
 -----------------------------------------------------------------------
 util.create_thread(function()
     while true do
-        util.yield(200)  -- throttle: check 5 times per second, not every frame
+        util.yield(200)
 
         if not attach_params.active or not attach_params.vehicle then
             goto continue
@@ -245,17 +253,15 @@ util.create_thread(function()
         end
 
         if not entity_exists(attach_params.vehicle) then
-            -- Target vehicle is gone, clean up
             attach_params.active = false
             attach_params.vehicle = nil
             attached_vehicle = nil
             attached_player_name = nil
-            pcall(notify.push, SCRIPT_NAME, 'Vehicle no longer exists, detached', { icon = notify.icon.hazard })
+            safe_notify('Vehicle no longer exists, detached', { icon = notify.icon.hazard })
             goto continue
         end
 
         if not is_entity_attached(entity) then
-            -- We got detached (animation, ragdoll, etc) — reattach
             raw_attach(
                 entity,
                 attach_params.vehicle,
@@ -279,18 +285,33 @@ end)
 -- Menu setup
 -----------------------------------------------------------------------
 local root = menu.root()
-local player_menus = {}  -- track created player submenu handles
+if not root then
+    safe_notify('Failed to get menu root. Exiting.', { icon = notify.icon.hazard })
+    pcall(this.unload)
+    return
+end
+
+local player_menus = {}
 
 -----------------------------------------------------------------------
 -- Safe menu helpers
 -----------------------------------------------------------------------
 local function safe_delete_menu(m)
     if not m then return end
-    -- Try multiple deletion methods — API varies between versions
     local ok = pcall(function() m:delete() end)
     if not ok then
         pcall(function() m:remove() end)
     end
+end
+
+-----------------------------------------------------------------------
+-- Rebuild signaling — all rebuilds happen inside a dedicated thread
+-- so util.yield() is always safe. Callbacks just set a flag.
+-----------------------------------------------------------------------
+local rebuild_requested = false
+
+local function request_rebuild()
+    rebuild_requested = true
 end
 
 -----------------------------------------------------------------------
@@ -299,44 +320,50 @@ end
 local detach_btn = root:button('Detach')
 detach_btn:tooltip('Quick detach from any vehicle you are attached to')
 detach_btn:event(menu.event.click, function()
+    -- No util.yield(), no unprotected calls — safe in callback context
     if attached_vehicle then
         local name = attached_player_name or 'vehicle'
         do_detach()
-        notify.push(SCRIPT_NAME, 'Detached from ' .. name)
+        safe_notify('Detached from ' .. name)
     else
-        notify.push(SCRIPT_NAME, 'Not attached to anything')
+        safe_notify('Not attached to anything')
     end
 end)
 
 local refresh_btn = root:button('Refresh Players')
 refresh_btn:tooltip('Refresh the player list below')
 refresh_btn:event(menu.event.click, function()
-    rebuild_player_list()
+    -- Do NOT call rebuild_player_list() directly — it uses util.yield()
+    -- which crashes outside a coroutine. Signal the rebuild thread instead.
+    request_rebuild()
 end)
 
 -----------------------------------------------------------------------
 -- Build a full submenu for one player
+-- Called ONLY from rebuild thread (coroutine context).
 -----------------------------------------------------------------------
 local function add_player_menu(player)
-    local my = players.me()
-    if not my or player.id == my.id then
-        return
-    end
+    -- Wrap ALL player/self property access in pcall — these are metamethod-backed
+    -- native queries that can throw if session state changes.
+    local ok_p, label, pid, pname, in_veh = pcall(function()
+        local me = players.me()
+        if me and player.id == me.id then
+            return nil  -- skip self
+        end
+        return tostring(player.name or 'Unknown'), player.id, tostring(player.name or 'Unknown'), player.in_vehicle
+    end)
+    if not ok_p or not label then return nil end
 
-    local label = player.name
-    if not player.in_vehicle then
+    if not in_veh then
         label = label .. ' [On Foot]'
     end
 
     local p_menu = root:submenu(label)
+    if not p_menu then return nil end
     table.insert(player_menus, p_menu)
 
-    local pid = player.id
-    local pname = player.name
-
     --------------------------------------------------------------------
-    -- Position (avoid chaining — assign each step to avoid crashes
-    -- if an intermediate method returns nil)
+    -- Position
     --------------------------------------------------------------------
     p_menu:breaker('Position')
 
@@ -370,17 +397,17 @@ local function add_player_menu(player)
     sy_rot:tooltip('Face left or right')
 
     --------------------------------------------------------------------
-    -- Live update helper — only acts if we are attached to THIS player
+    -- Live update helper
     --------------------------------------------------------------------
-    local menu_alive = true  -- guard against callbacks firing after rebuild
+    local menu_alive = true
 
     local function live_update()
         if not menu_alive then return end
-        if attached_vehicle and attached_player_name == pname then
-            pcall(do_attach, attached_vehicle,
-                sx.value, sy.value, sz.value,
-                sp.value, srl.value, sy_rot.value)
-        end
+        if not attached_vehicle then return end
+        if attached_player_name ~= pname then return end
+        pcall(do_attach, attached_vehicle,
+            sx.value, sy.value, sz.value,
+            sp.value, srl.value, sy_rot.value)
     end
 
     sx:event(menu.event.change, function() live_update() end)
@@ -400,13 +427,24 @@ local function add_player_menu(player)
         btn:tooltip(preset[1])
         btn:event(menu.event.click, function()
             if not menu_alive then return end
-            local ok, target = pcall(players.get, pid)
-            if not ok or not target or not target.exists or not target.connected then
-                notify.push(SCRIPT_NAME, 'Player no longer in session')
+
+            local ok_t, target = pcall(players.get, pid)
+            if not ok_t or not target then
+                safe_notify('Player no longer in session')
                 return
             end
-            if not target.in_vehicle or not target.vehicle or target.vehicle == 0 then
-                notify.push(SCRIPT_NAME, target.name .. ' is not in a vehicle')
+
+            local ok_e, exists = pcall(function() return target.exists end)
+            local ok_c, connected = pcall(function() return target.connected end)
+            if not (ok_e and exists) or not (ok_c and connected) then
+                safe_notify('Player no longer in session')
+                return
+            end
+
+            local ok_v, in_veh = pcall(function() return target.in_vehicle end)
+            local ok_vh, veh = pcall(function() return target.vehicle end)
+            if not (ok_v and in_veh) or not (ok_vh and veh) or veh == 0 then
+                safe_notify(pname .. ' is not in a vehicle')
                 return
             end
 
@@ -417,9 +455,9 @@ local function add_player_menu(player)
             srl.value = preset[6]
             sy_rot.value = preset[7]
 
-            if do_attach(target.vehicle, preset[2], preset[3], preset[4], preset[5], preset[6], preset[7]) then
-                attached_player_name = target.name
-                notify.push(SCRIPT_NAME, 'Attached to ' .. target.name .. ' (' .. preset[1] .. ')')
+            if do_attach(veh, preset[2], preset[3], preset[4], preset[5], preset[6], preset[7]) then
+                attached_player_name = pname
+                safe_notify('Attached to ' .. pname .. ' (' .. preset[1] .. ')')
             end
         end)
     end
@@ -433,24 +471,40 @@ local function add_player_menu(player)
     attach_btn:tooltip('Attach using the position and rotation values above')
     attach_btn:event(menu.event.click, function()
         if not menu_alive then return end
-        local ok, target = pcall(players.get, pid)
-        if not ok or not target or not target.exists or not target.connected then
-            notify.push(SCRIPT_NAME, 'Player no longer in session')
-            return
-        end
-        local my = players.me()
-        if my and target.id == my.id then
-            notify.push(SCRIPT_NAME, 'Cannot attach to yourself')
-            return
-        end
-        if not target.in_vehicle or not target.vehicle or target.vehicle == 0 then
-            notify.push(SCRIPT_NAME, target.name .. ' is not in a vehicle')
+
+        local ok_t, target = pcall(players.get, pid)
+        if not ok_t or not target then
+            safe_notify('Player no longer in session')
             return
         end
 
-        if do_attach(target.vehicle, sx.value, sy.value, sz.value, sp.value, srl.value, sy_rot.value) then
-            attached_player_name = target.name
-            notify.push(SCRIPT_NAME, 'Attached to ' .. target.name)
+        local ok_e, exists = pcall(function() return target.exists end)
+        local ok_c, connected = pcall(function() return target.connected end)
+        if not (ok_e and exists) or not (ok_c and connected) then
+            safe_notify('Player no longer in session')
+            return
+        end
+
+        -- Use stored pid instead of accessing target.id (metamethod-backed, could throw)
+        local ok_me2, my2 = pcall(players.me)
+        if ok_me2 and my2 then
+            local ok_mid, mid = pcall(function() return my2.id end)
+            if ok_mid and mid and pid == mid then
+                safe_notify('Cannot attach to yourself')
+                return
+            end
+        end
+
+        local ok_v, in_veh = pcall(function() return target.in_vehicle end)
+        local ok_vh, veh = pcall(function() return target.vehicle end)
+        if not (ok_v and in_veh) or not (ok_vh and veh) or veh == 0 then
+            safe_notify(pname .. ' is not in a vehicle')
+            return
+        end
+
+        if do_attach(veh, sx.value, sy.value, sz.value, sp.value, srl.value, sy_rot.value) then
+            attached_player_name = pname
+            safe_notify('Attached to ' .. attached_player_name)
         end
     end)
 
@@ -459,9 +513,9 @@ local function add_player_menu(player)
     detach_btn2:event(menu.event.click, function()
         if attached_vehicle then
             do_detach()
-            notify.push(SCRIPT_NAME, 'Detached')
+            safe_notify('Detached')
         else
-            notify.push(SCRIPT_NAME, 'Not attached to anything')
+            safe_notify('Not attached to anything')
         end
     end)
 
@@ -476,7 +530,7 @@ local function add_player_menu(player)
         srl.value = 0.0
         sy_rot.value = 0.0
         live_update()
-        notify.push(SCRIPT_NAME, 'Sliders reset')
+        safe_notify('Sliders reset')
     end)
 
     local col_toggle = p_menu:toggle('Disable Collision')
@@ -488,28 +542,24 @@ local function add_player_menu(player)
             if entity then
                 call_native(N_SET_ENTITY_COMPLETELY_DISABLE_COLLISION, entity, 0, 0)
             end
-            notify.push(SCRIPT_NAME, 'Collision disabled')
+            safe_notify('Collision disabled')
         end
     end)
 
-    -- Return a cleanup function to invalidate callbacks
+    -- Return cleanup function to invalidate callbacks when menu is rebuilt
     return function()
         menu_alive = false
     end
 end
 
 -----------------------------------------------------------------------
--- Build / rebuild player list (with debounce guard)
+-- Build / rebuild player list
+-- ONLY called from coroutine threads — never from callbacks directly.
 -----------------------------------------------------------------------
 local menu_cleanup_fns = {}
 
-function rebuild_player_list()
-    if rebuild_pending then
-        return
-    end
-    rebuild_pending = true
-
-    -- Invalidate all old menu callbacks first
+local function rebuild_player_list()
+    -- Invalidate all old menu callbacks
     for _, cleanup in ipairs(menu_cleanup_fns) do
         pcall(cleanup)
     end
@@ -521,46 +571,43 @@ function rebuild_player_list()
     end
     player_menus = {}
 
-    -- Small yield to let the menu engine process deletions
+    -- Yield to let the menu engine process deletions (safe — we're in a thread)
     util.yield(100)
 
     local ok, player_list = pcall(players.list)
     if not ok or not player_list then
-        rebuild_pending = false
-        notify.push(SCRIPT_NAME, 'Could not get player list')
+        safe_notify('Could not get player list')
         return
     end
 
-    local my = players.me()
-    local my_id = my and my.id or -1
+    local ok_me, my = pcall(players.me)
+    local my_id = -1
+    if ok_me and my then
+        local ok_id, id_val = pcall(function() return my.id end)
+        if ok_id and id_val then my_id = id_val end
+    end
 
     local count = 0
     for _, player in ipairs(player_list) do
-        if player.connected and player.exists and player.id ~= my_id then
+        local p_ok, p_conn, p_exists, p_id = pcall(function()
+            return player.connected, player.exists, player.id
+        end)
+        if p_ok and p_conn and p_exists and p_id ~= my_id then
             local ok2, cleanup = pcall(add_player_menu, player)
-            if ok2 then
+            if ok2 and cleanup then
                 count = count + 1
-                if cleanup then
-                    table.insert(menu_cleanup_fns, cleanup)
-                end
+                table.insert(menu_cleanup_fns, cleanup)
             end
         end
     end
 
-    rebuild_pending = false
-    notify.push(SCRIPT_NAME, 'Found ' .. count .. ' players')
+    safe_notify('Found ' .. count .. ' players')
 end
 
 -----------------------------------------------------------------------
--- Auto-refresh on player join/leave (debounced via thread)
+-- Single rebuild thread — all rebuilds happen here (coroutine-safe).
+-- Debounces by waiting 500ms, then checking the flag.
 -----------------------------------------------------------------------
-local rebuild_requested = false
-
-local function request_rebuild()
-    rebuild_requested = true
-end
-
--- Debounce thread: waits 500ms after last request before rebuilding
 util.create_thread(function()
     while true do
         util.yield(500)
@@ -571,29 +618,34 @@ util.create_thread(function()
     end
 end)
 
-events.subscribe(events.event.player_join, function(data)
-    request_rebuild()
+-----------------------------------------------------------------------
+-- Auto-refresh on player join/leave
+-----------------------------------------------------------------------
+pcall(function()
+    events.subscribe(events.event.player_join, function(data)
+        request_rebuild()
+    end)
 end)
 
-events.subscribe(events.event.player_leave, function(data)
-    -- Check if the leaving player is who we're attached to
-    local left_name = nil
-    if data then
-        if type(data) == 'table' then
-            if data.player and data.player.name then
-                left_name = data.player.name
+pcall(function()
+    events.subscribe(events.event.player_leave, function(data)
+        -- Check if the leaving player is who we're attached to
+        local left_name = nil
+        if data and type(data) == 'table' then
+            if data.player and type(data.player) == 'table' and data.player.name then
+                left_name = tostring(data.player.name)
             elseif data.name then
-                left_name = data.name
+                left_name = tostring(data.name)
             end
         end
-    end
 
-    if attached_player_name and left_name and left_name == attached_player_name then
-        do_detach()
-        pcall(notify.push, SCRIPT_NAME, 'Auto-detached: ' .. left_name .. ' left', { icon = notify.icon.hazard })
-    end
+        if attached_player_name and left_name and left_name == attached_player_name then
+            do_detach()
+            safe_notify('Auto-detached: ' .. left_name .. ' left', { icon = notify.icon.hazard })
+        end
 
-    request_rebuild()
+        request_rebuild()
+    end)
 end)
 
 -----------------------------------------------------------------------
@@ -604,4 +656,4 @@ util.create_thread(function()
     pcall(rebuild_player_list)
 end)
 
-notify.push(SCRIPT_NAME, 'v' .. SCRIPT_VERSION .. ' loaded', { icon = notify.icon.info })
+safe_notify('v' .. SCRIPT_VERSION .. ' loaded', { icon = notify.icon.info })
