@@ -36,8 +36,6 @@ local N_IS_ENTITY_ATTACHED               = 0xB346476EF1A64897
 local N_DOES_ENTITY_EXIST                = 0x7239B21A38F536BA
 local N_SET_PED_CAN_PLAY_AMBIENT_ANIMS      = 0x6EC47A344923E1ED
 local N_SET_PED_CAN_PLAY_AMBIENT_BASE_ANIMS = 0x0EB0585D15254740
-local N_CLEAR_PED_TASKS_IMMEDIATELY      = 0xAAA34F8A7CB32098
-local N_TASK_STAND_STILL                 = 0x919BE13EED931959
 
 -- ─── Helpers ─────────────────────────────────────────────────────────
 local function call_native(hash, ...)
@@ -119,8 +117,6 @@ end
 local function freeze_ped()
     local ped = get_my_ped()
     if not ped then return end
-    call_native(N_CLEAR_PED_TASKS_IMMEDIATELY, ped)
-    call_native(N_TASK_STAND_STILL, ped, -1)
     call_native(N_SET_PED_CAN_PLAY_AMBIENT_ANIMS, ped, 0)
     call_native(N_SET_PED_CAN_PLAY_AMBIENT_BASE_ANIMS, ped, 0)
 end
@@ -128,7 +124,6 @@ end
 local function unfreeze_ped()
     local ped = get_my_ped()
     if not ped then return end
-    call_native(N_CLEAR_PED_TASKS_IMMEDIATELY, ped)
     call_native(N_SET_PED_CAN_PLAY_AMBIENT_ANIMS, ped, 1)
     call_native(N_SET_PED_CAN_PLAY_AMBIENT_BASE_ANIMS, ped, 1)
 end
@@ -160,7 +155,7 @@ local function raw_attach(entity, target_vehicle, x, y, z, pitch, roll, yaw)
         entity, target_vehicle, 0,
         x + 0.0, y + 0.0, z + 0.0,
         pitch + 0.0, roll + 0.0, yaw + 0.0,
-        1, 0, 1, 0, 0, 1)
+        0, 1, 1, 0, 2, 1)
 end
 
 local function do_attach(target_vehicle, x, y, z, pitch, roll, yaw)
