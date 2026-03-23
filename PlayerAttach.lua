@@ -221,24 +221,6 @@ if not root then
     return
 end
 
--- ─── Probe slider support once ──────────────────────────────────────
-local use_sliders = false
-do
-    local probe_menu = root:submenu('_probe')
-    if probe_menu then
-        local ok, s = pcall(function()
-            local sl = probe_menu:number_float('_test', menu.type.scroll)
-            sl:fmt('%.2f', -1.0, 1.0, 0.1)
-            return sl
-        end)
-        if ok and s then
-            use_sliders = true
-            pcall(function() s:delete() end)
-        end
-        pcall(function() probe_menu:delete() end)
-    end
-end
-
 -- ─── Player tracking ────────────────────────────────────────────────
 local player_entries = {}  -- pid → { menu, name, sliders }
 
@@ -262,83 +244,98 @@ end
 
 -- ─── Build position controls inside a parent menu ───────────────────
 local function build_position_controls(parent)
-    local sliders = nil
+    -- Try sliders first
+    local sliders = {}
+    local slider_defs = {
+        { 'Left / Right', 'x',     -10.0,  10.0, 0.10, '%.2f' },
+        { 'Back / Front', 'y',     -10.0,  10.0, 0.10, '%.2f' },
+        { 'Down / Up',    'z',     -10.0,  10.0, 0.10, '%.2f' },
+        { 'Pitch',        'pitch', -180.0, 180.0, 1.0, '%.0f' },
+        { 'Roll',         'roll',  -180.0, 180.0, 1.0, '%.0f' },
+        { 'Yaw',          'yaw',   -180.0, 180.0, 1.0, '%.0f' },
+    }
 
-    if use_sliders then
-        sliders = {}
-        local defs = {
-            { 'Left / Right', 'x',     -10.0,  10.0, 0.10, '%.2f' },
-            { 'Back / Front', 'y',     -10.0,  10.0, 0.10, '%.2f' },
-            { 'Down / Up',    'z',     -10.0,  10.0, 0.10, '%.2f' },
-            { 'Pitch',        'pitch', -180.0, 180.0, 1.0, '%.0f' },
-            { 'Roll',         'roll',  -180.0, 180.0, 1.0, '%.0f' },
-            { 'Yaw',          'yaw',   -180.0, 180.0, 1.0, '%.0f' },
-        }
-        for _, d in ipairs(defs) do
-            local label, key, lo, hi, step, fmt = d[1], d[2], d[3], d[4], d[5], d[6]
-            local ok, s = pcall(function()
-                local sl = parent:number_float(label, menu.type.scroll)
-                sl:fmt(fmt, lo, hi, step)
-                sl:event(menu.event.click, function(opt)
-                    offset[key] = opt.value
-                    reattach()
-                end)
-                return sl
+    local slider_count = 0
+    for _, d in ipairs(slider_defs) do
+        local label, key, lo, hi, step, fmt = d[1], d[2], d[3], d[4], d[5], d[6]
+        local ok, s = pcall(function()
+            local sl = parent:number_float(label, menu.type.scroll)
+            sl:fmt(fmt, lo, hi, step)
+            sl:event(menu.event.click, function(opt)
+                offset[key] = opt.value
+                reattach()
             end)
-            if ok and s then
-                sliders[key] = s
-            end
-        end
-    else
-        local step_sizes = { 0.05, 0.1, 0.25, 0.5, 1.0 }
-        local step_names = { '0.05', '0.1', '0.25', '0.5', '1.0' }
-        local rot_steps  = { 1.0, 5.0, 15.0, 30.0, 45.0 }
-        local rot_names  = { '1', '5', '15', '30', '45' }
-        local step_idx   = 2
-
-        parent:button('Cycle Step Size'):event(menu.event.click, function()
-            step_idx = step_idx % 5 + 1
-            safe_notify('Step: ' .. step_names[step_idx] .. '  Rot: ' .. rot_names[step_idx])
+            return sl
         end)
-
-        local axes = {
-            { 'x',     'Left',       'Right',      false },
-            { 'y',     'Back',       'Front',      false },
-            { 'z',     'Down',       'Up',         false },
-            { 'pitch', 'Pitch Down', 'Pitch Up',   true  },
-            { 'roll',  'Roll Left',  'Roll Right',  true  },
-            { 'yaw',   'Yaw Left',   'Yaw Right',   true  },
-        }
-        for _, a in ipairs(axes) do
-            local key, lbl_neg, lbl_pos, is_rot = a[1], a[2], a[3], a[4]
-            parent:button(lbl_neg):event(menu.event.click, function()
-                local s = is_rot and rot_steps[step_idx] or step_sizes[step_idx]
-                offset[key] = offset[key] - s
-                reattach()
-                safe_notify(key .. ' = ' .. string.format('%.2f', offset[key]))
-            end)
-            parent:button(lbl_pos):event(menu.event.click, function()
-                local s = is_rot and rot_steps[step_idx] or step_sizes[step_idx]
-                offset[key] = offset[key] + s
-                reattach()
-                safe_notify(key .. ' = ' .. string.format('%.2f', offset[key]))
-            end)
+        if ok and s then
+            sliders[key] = s
+            slider_count = slider_count + 1
         end
+    end
+
+    -- If at least position sliders worked, use them
+    if slider_count >= 3 then
+        parent:button('Reset Position'):event(menu.event.click, function()
+            offset.x, offset.y, offset.z = 0.0, 0.0, 0.0
+            offset.pitch, offset.roll, offset.yaw = 0.0, 0.0, 0.0
+            for _, key in ipairs({ 'x', 'y', 'z', 'pitch', 'roll', 'yaw' }) do
+                if sliders[key] then pcall(function() sliders[key].value = 0.0 end) end
+            end
+            reattach()
+            safe_notify('Position reset')
+        end)
+        return sliders
+    end
+
+    -- Sliders failed — clean up any that succeeded
+    for _, s in pairs(sliders) do
+        pcall(function() s:delete() end)
+    end
+
+    -- Button-based fallback
+    local step_sizes = { 0.05, 0.1, 0.25, 0.5, 1.0 }
+    local step_names = { '0.05', '0.1', '0.25', '0.5', '1.0' }
+    local rot_steps  = { 1.0, 5.0, 15.0, 30.0, 45.0 }
+    local rot_names  = { '1', '5', '15', '30', '45' }
+    local step_idx   = 2
+
+    parent:button('Cycle Step Size'):event(menu.event.click, function()
+        step_idx = step_idx % 5 + 1
+        safe_notify('Step: ' .. step_names[step_idx] .. '  Rot: ' .. rot_names[step_idx])
+    end)
+
+    local axes = {
+        { 'x',     'Left',       'Right',      false },
+        { 'y',     'Back',       'Front',      false },
+        { 'z',     'Down',       'Up',         false },
+        { 'pitch', 'Pitch Down', 'Pitch Up',   true  },
+        { 'roll',  'Roll Left',  'Roll Right',  true  },
+        { 'yaw',   'Yaw Left',   'Yaw Right',   true  },
+    }
+    for _, a in ipairs(axes) do
+        local key, lbl_neg, lbl_pos, is_rot = a[1], a[2], a[3], a[4]
+        parent:button(lbl_neg):event(menu.event.click, function()
+            local s = is_rot and rot_steps[step_idx] or step_sizes[step_idx]
+            offset[key] = offset[key] - s
+            reattach()
+            safe_notify(key .. ' = ' .. string.format('%.2f', offset[key]))
+        end)
+        parent:button(lbl_pos):event(menu.event.click, function()
+            local s = is_rot and rot_steps[step_idx] or step_sizes[step_idx]
+            offset[key] = offset[key] + s
+            reattach()
+            safe_notify(key .. ' = ' .. string.format('%.2f', offset[key]))
+        end)
     end
 
     parent:button('Reset Position'):event(menu.event.click, function()
         offset.x, offset.y, offset.z = 0.0, 0.0, 0.0
         offset.pitch, offset.roll, offset.yaw = 0.0, 0.0, 0.0
-        if sliders then
-            for _, key in ipairs({ 'x', 'y', 'z', 'pitch', 'roll', 'yaw' }) do
-                if sliders[key] then pcall(function() sliders[key].value = 0.0 end) end
-            end
-        end
         reattach()
         safe_notify('Position reset')
     end)
 
-    return sliders
+    return nil
 end
 
 -- ─── Per-player submenu ─────────────────────────────────────────────
@@ -492,5 +489,4 @@ util.create_thread(function()
 end)
 
 -- ─── Ready ──────────────────────────────────────────────────────────
-local mode = use_sliders and 'sliders' or 'buttons'
-safe_notify('v' .. SCRIPT_VERSION .. ' (' .. mode .. ')', { icon = notify.icon.info })
+safe_notify('v' .. SCRIPT_VERSION .. ' loaded', { icon = notify.icon.info })
