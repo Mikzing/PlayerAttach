@@ -18,7 +18,7 @@
 --
 
 local SCRIPT_NAME = 'Player Attach'
-local SCRIPT_VERSION = '1.5.0'
+local SCRIPT_VERSION = '1.6.0'
 
 -----------------------------------------------------------------------
 -- Permission check
@@ -263,8 +263,8 @@ if not root then
 end
 
 -----------------------------------------------------------------------
--- Player tracking — map-based, never duplicates
--- player_entries[pid] = { menu, cleanup, name }
+-- Player tracking — keyed by pid, prevents duplicates
+-- player_entries[pid] = { menu = submenu_handle, name = string }
 -----------------------------------------------------------------------
 local player_entries = {}
 
@@ -295,21 +295,32 @@ detach_btn:event(menu.event.click, function()
 end)
 
 -----------------------------------------------------------------------
--- Create a full submenu for one player (returns entry table or nil)
+-- Create submenu for one player.
+-- IMPORTANT: Track the submenu IMMEDIATELY after root:submenu() so
+-- that even if later menu setup throws, we never create an orphan
+-- that would cause duplicates on next refresh.
 -----------------------------------------------------------------------
 local function create_player_menu(pid, pname)
-    local label = pname
-    -- Check if player is in vehicle for label
+    local label = pname .. ' [On Foot]'
+
+    -- Try to check vehicle status for label
     local ok_t, target = pcall(players.get, pid)
     if ok_t and target then
         local ok_v, in_veh = pcall(function() return target.in_vehicle end)
-        if ok_v and not in_veh then
-            label = label .. ' [On Foot]'
+        if ok_v and in_veh then
+            label = pname
         end
     end
 
     local p_menu = root:submenu(label)
-    if not p_menu then return nil end
+    if not p_menu then return false end
+
+    -- Track IMMEDIATELY — even if setup below fails, this pid is "taken"
+    -- so we never create a duplicate submenu for the same player.
+    player_entries[pid] = { menu = p_menu, name = pname }
+
+    -- Everything below is best-effort. If any part throws, the submenu
+    -- still exists and is tracked. The player just gets a partial menu.
 
     --------------------------------------------------------------------
     -- Position
@@ -348,10 +359,7 @@ local function create_player_menu(pid, pname)
     --------------------------------------------------------------------
     -- Live update helper
     --------------------------------------------------------------------
-    local menu_alive = true
-
     local function live_update()
-        if not menu_alive then return end
         if not attached_vehicle then return end
         if attached_player_name ~= pname then return end
         pcall(do_attach, attached_vehicle,
@@ -375,17 +383,8 @@ local function create_player_menu(pid, pname)
         local btn = p_menu:button(preset[1])
         btn:tooltip(preset[1])
         btn:event(menu.event.click, function()
-            if not menu_alive then return end
-
             local ok_tg, tgt = pcall(players.get, pid)
             if not ok_tg or not tgt then
-                safe_notify('Player no longer in session')
-                return
-            end
-
-            local ok_e, exists = pcall(function() return tgt.exists end)
-            local ok_c, connected = pcall(function() return tgt.connected end)
-            if not (ok_e and exists) or not (ok_c and connected) then
                 safe_notify('Player no longer in session')
                 return
             end
@@ -419,17 +418,8 @@ local function create_player_menu(pid, pname)
     local attach_btn = p_menu:button('Attach')
     attach_btn:tooltip('Attach using the position and rotation values above')
     attach_btn:event(menu.event.click, function()
-        if not menu_alive then return end
-
         local ok_tg, tgt = pcall(players.get, pid)
         if not ok_tg or not tgt then
-            safe_notify('Player no longer in session')
-            return
-        end
-
-        local ok_e, exists = pcall(function() return tgt.exists end)
-        local ok_c, connected = pcall(function() return tgt.connected end)
-        if not (ok_e and exists) or not (ok_c and connected) then
             safe_notify('Player no longer in session')
             return
         end
@@ -470,7 +460,6 @@ local function create_player_menu(pid, pname)
     local reset_btn = p_menu:button('Reset Sliders')
     reset_btn:tooltip('Reset all position and rotation sliders to 0')
     reset_btn:event(menu.event.click, function()
-        if not menu_alive then return end
         sx.value = 0.0
         sy.value = 0.0
         sz.value = 0.0
@@ -494,11 +483,7 @@ local function create_player_menu(pid, pname)
         end
     end)
 
-    return {
-        menu = p_menu,
-        name = pname,
-        cleanup = function() menu_alive = false end,
-    }
+    return true
 end
 
 -----------------------------------------------------------------------
@@ -507,19 +492,18 @@ end
 local function remove_player(pid)
     local entry = player_entries[pid]
     if not entry then return end
-    if entry.cleanup then pcall(entry.cleanup) end
     safe_delete_menu(entry.menu)
     player_entries[pid] = nil
 end
 
 -----------------------------------------------------------------------
--- Sync player list — add new players, remove departed ones.
--- Called ONLY from coroutine threads (uses util.yield).
--- Idempotent: calling it multiple times never creates duplicates.
+-- Refresh: scan player list, add new, remove departed.
+-- Only called from coroutine threads or on startup.
 -----------------------------------------------------------------------
-local function sync_players(show_count)
+local function refresh_players()
     local ok, player_list = pcall(players.list)
     if not ok or not player_list then
+        safe_notify('Could not get player list')
         return
     end
 
@@ -531,23 +515,21 @@ local function sync_players(show_count)
         if ok_id and id_val then my_id = id_val end
     end
 
-    -- Build set of current player ids
-    local current_pids = {}
+    -- Build set of current valid players: pid -> name
+    local current = {}
     for _, player in ipairs(player_list) do
-        local p_ok, p_conn, p_exists, p_id, p_name = pcall(function()
-            return player.connected, player.exists, player.id, tostring(player.name or 'Unknown')
+        local p_ok, p_id, p_name = pcall(function()
+            return player.id, tostring(player.name or 'Unknown')
         end)
-        if p_ok and p_conn and p_exists and p_id ~= my_id then
-            current_pids[p_id] = p_name
+        if p_ok and p_id and p_id ~= my_id then
+            current[p_id] = p_name
         end
     end
 
-    -- Remove entries for players who left
-    for pid, _ in pairs(player_entries) do
-        if not current_pids[pid] then
-            -- If we were attached to this player, detach
-            local entry = player_entries[pid]
-            if entry and attached_player_name and entry.name == attached_player_name then
+    -- Remove entries for players no longer in session
+    for pid, entry in pairs(player_entries) do
+        if not current[pid] then
+            if attached_player_name and entry.name == attached_player_name then
                 do_detach()
                 safe_notify('Auto-detached: ' .. entry.name .. ' left', { icon = notify.icon.hazard })
             end
@@ -555,81 +537,53 @@ local function sync_players(show_count)
         end
     end
 
-    -- Add entries for new players (skip if already tracked)
+    -- Add new players (skip anyone already tracked)
     local added = 0
-    for pid, pname in pairs(current_pids) do
+    for pid, pname in pairs(current) do
         if not player_entries[pid] then
-            local ok2, entry = pcall(create_player_menu, pid, pname)
-            if ok2 and entry then
-                player_entries[pid] = entry
+            -- create_player_menu tracks immediately in player_entries,
+            -- so even if it partially fails, no duplicate is possible.
+            pcall(create_player_menu, pid, pname)
+            if player_entries[pid] then
                 added = added + 1
             end
         end
     end
 
-    if show_count then
-        local total = 0
-        for _ in pairs(player_entries) do total = total + 1 end
-        safe_notify('Found ' .. total .. ' players')
-    end
+    local total = 0
+    for _ in pairs(player_entries) do total = total + 1 end
+    safe_notify('Found ' .. total .. ' players')
 end
 
 -----------------------------------------------------------------------
--- Sync signaling — all syncs happen inside a dedicated thread
+-- Refresh button — runs in a thread so util.yield is available
+-- This is the ONLY way to refresh. No auto-refresh.
 -----------------------------------------------------------------------
-local sync_requested = false
-local sync_show_count = false
+local refresh_requested = false
 
-local function request_sync(show_count)
-    sync_requested = true
-    if show_count then
-        sync_show_count = true
-    end
-end
+local refresh_btn = root:button('Refresh Players')
+refresh_btn:tooltip('Refresh the player list')
+refresh_btn:event(menu.event.click, function()
+    refresh_requested = true
+end)
 
--- Debounced sync thread (500ms cooldown)
+-- Single thread that processes refresh requests
 util.create_thread(function()
     while true do
-        util.yield(500)
-        if sync_requested then
-            sync_requested = false
-            local show = sync_show_count
-            sync_show_count = false
-            pcall(sync_players, show)
+        util.yield(250)
+        if refresh_requested then
+            refresh_requested = false
+            pcall(refresh_players)
         end
     end
 end)
 
 -----------------------------------------------------------------------
--- Refresh button — signals the sync thread
------------------------------------------------------------------------
-local refresh_btn = root:button('Refresh Players')
-refresh_btn:tooltip('Refresh the player list')
-refresh_btn:event(menu.event.click, function()
-    request_sync(true)
-end)
-
------------------------------------------------------------------------
--- Auto-refresh on player join/leave
------------------------------------------------------------------------
-pcall(function()
-    events.subscribe(events.event.player_join, function(data)
-        request_sync(false)
-    end)
-end)
-
-pcall(function()
-    events.subscribe(events.event.player_leave, function(data)
-        request_sync(false)
-    end)
-end)
-
------------------------------------------------------------------------
--- Initial build + startup
+-- Initial load — one refresh on startup
 -----------------------------------------------------------------------
 util.create_thread(function()
     util.yield(2000)
-    pcall(sync_players, true)
+    pcall(refresh_players)
 end)
 
 safe_notify('v' .. SCRIPT_VERSION .. ' loaded', { icon = notify.icon.info })
