@@ -76,6 +76,14 @@ local presets = {
     { 'Hanging Back', 'Cling to the rear bumper',                0.0,  -2.0,  0.2, 180.0 },
 }
 
+-- ─── Slider definitions (shared by both menus) ─────────────────────
+local slider_defs = {
+    { 'X  Left / Right', 'x',   -10.0,  10.0, 0.05, '%.2f', 'Move left (-) or right (+)' },
+    { 'Y  Back / Front', 'y',   -10.0,  10.0, 0.05, '%.2f', 'Move backward (-) or forward (+)' },
+    { 'Z  Down / Up',    'z',   -10.0,  10.0, 0.05, '%.2f', 'Move down (-) or up (+)' },
+    { 'Yaw',             'yaw', -180.0, 180.0, 1.0, '%.0f', 'Rotate left/right (turn)' },
+}
+
 -- ─── Attachment state ───────────────────────────────────────────────
 local attached_player_name = nil
 local offset = { x = 0.0, y = 0.0, z = 0.0, yaw = 0.0 }
@@ -163,12 +171,72 @@ end)
 -- ─── Self menu (menu.root) ─────────────────────────────────────────
 local root = menu.root()
 
+-- Attach button
+root:button('Attach')
+    :tooltip('Attach to the targeted player\'s vehicle using current offsets')
+    :event(menu.event.click, function()
+        local veh = get_target_vehicle()
+        local name = get_target_name()
+        if not veh then notify.push(SCRIPT_NAME, name .. ' is not in a vehicle'); return end
+        if do_attach(veh, offset.x, offset.y, offset.z, offset.yaw) then
+            attached_player_name = name
+            notify.push(SCRIPT_NAME, 'Attached to ' .. name)
+        end
+    end)
+
+-- Detach button
 root:button('Detach')
     :tooltip('Quick detach from any vehicle you are attached to')
     :event(menu.event.click, function()
         local name = attached_player_name or 'vehicle'
         do_detach()
         notify.push(SCRIPT_NAME, 'Detached from ' .. name)
+    end)
+
+-- Presets submenu
+local root_presets_sub = root:submenu('Presets')
+root_presets_sub:tooltip('Quick-attach to common positions on the vehicle')
+
+for _, p in ipairs(presets) do
+    root_presets_sub:button(p[1])
+        :tooltip(p[2])
+        :event(menu.event.click, function()
+            local veh = get_target_vehicle()
+            local name = get_target_name()
+            if not veh then notify.push(SCRIPT_NAME, name .. ' is not in a vehicle'); return end
+
+            offset.x, offset.y, offset.z = p[3], p[4], p[5]
+            offset.yaw = p[6]
+
+            if do_attach(veh, p[3], p[4], p[5], p[6]) then
+                attached_player_name = name
+                notify.push(SCRIPT_NAME, 'Attached to ' .. name .. ' (' .. p[1] .. ')')
+            end
+        end)
+end
+
+-- Adjust Position submenu
+local root_pos_sub = root:submenu('Adjust Position')
+root_pos_sub:tooltip('Fine-tune your X/Y/Z position and rotation on the vehicle')
+
+for _, d in ipairs(slider_defs) do
+    local label, key, lo, hi, step, fmt, tip = d[1], d[2], d[3], d[4], d[5], d[6], d[7]
+    root_pos_sub:number_float(label, menu.type.scroll)
+        :fmt(fmt, lo, hi, step)
+        :tooltip(tip)
+        :event(menu.event.click, function(opt)
+            offset[key] = opt.value
+            reattach()
+        end)
+end
+
+root_pos_sub:button('Reset Position')
+    :tooltip('Reset all offsets back to 0')
+    :event(menu.event.click, function()
+        offset.x, offset.y, offset.z = 0.0, 0.0, 0.0
+        offset.yaw = 0.0
+        reattach()
+        notify.push(SCRIPT_NAME, 'Position reset')
     end)
 
 -- ─── Player menu (menu.player_root) ────────────────────────────────
@@ -221,13 +289,6 @@ end
 -- Adjust Position submenu
 local pos_sub = player_root:submenu('Adjust Position')
 pos_sub:tooltip('Fine-tune your X/Y/Z position and rotation on the vehicle')
-
-local slider_defs = {
-    { 'X  Left / Right', 'x',   -10.0,  10.0, 0.05, '%.2f', 'Move left (-) or right (+)' },
-    { 'Y  Back / Front', 'y',   -10.0,  10.0, 0.05, '%.2f', 'Move backward (-) or forward (+)' },
-    { 'Z  Down / Up',    'z',   -10.0,  10.0, 0.05, '%.2f', 'Move down (-) or up (+)' },
-    { 'Yaw',             'yaw', -180.0, 180.0, 1.0, '%.0f', 'Rotate left/right (turn)' },
-}
 
 for _, d in ipairs(slider_defs) do
     local label, key, lo, hi, step, fmt, tip = d[1], d[2], d[3], d[4], d[5], d[6], d[7]
