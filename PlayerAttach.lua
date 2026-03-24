@@ -242,15 +242,17 @@ local function build_player_entry(parent, player)
     local ap = psub:submenu('Adjust Position')
     ap:tooltip('Fine-tune your position on ' .. player.name .. '\'s vehicle')
 
+    local ap_sliders = {}
     for _, d in ipairs(slider_defs) do
         local label, key, lo, hi, step, fmt, tip = d[1], d[2], d[3], d[4], d[5], d[6], d[7]
-        ap:number_float(label, menu.type.scroll)
+        local slider = ap:number_float(label, menu.type.scroll)
             :fmt(fmt, lo, hi, step)
             :tooltip(tip)
             :event(menu.event.click, function(opt)
                 offset[key] = opt.value
                 reattach()
             end)
+        ap_sliders[#ap_sliders + 1] = slider
     end
 
     ap:button('Reset Position')
@@ -258,6 +260,7 @@ local function build_player_entry(parent, player)
         :event(menu.event.click, function()
             offset.x, offset.y, offset.z = 0.0, 0.0, 0.0
             offset.yaw = 0.0
+            for _, s in ipairs(ap_sliders) do s.value = 0.0 end
             reattach()
             notify.push(SCRIPT_NAME, 'Position reset')
         end)
@@ -312,15 +315,17 @@ root:button('Detach')
 local root_pos_sub = root:submenu('Adjust Position')
 root_pos_sub:tooltip('Fine-tune your X/Y/Z position and rotation on the vehicle')
 
+local root_sliders = {}
 for _, d in ipairs(slider_defs) do
     local label, key, lo, hi, step, fmt, tip = d[1], d[2], d[3], d[4], d[5], d[6], d[7]
-    root_pos_sub:number_float(label, menu.type.scroll)
+    local slider = root_pos_sub:number_float(label, menu.type.scroll)
         :fmt(fmt, lo, hi, step)
         :tooltip(tip)
         :event(menu.event.click, function(opt)
             offset[key] = opt.value
             reattach()
         end)
+    root_sliders[#root_sliders + 1] = slider
 end
 
 root_pos_sub:button('Reset Position')
@@ -328,6 +333,7 @@ root_pos_sub:button('Reset Position')
     :event(menu.event.click, function()
         offset.x, offset.y, offset.z = 0.0, 0.0, 0.0
         offset.yaw = 0.0
+        for _, s in ipairs(root_sliders) do s.value = 0.0 end
         reattach()
         notify.push(SCRIPT_NAME, 'Position reset')
     end)
@@ -383,15 +389,17 @@ end
 local pos_sub = player_root:submenu('Adjust Position')
 pos_sub:tooltip('Fine-tune your X/Y/Z position and rotation on the vehicle')
 
+local pos_sliders = {}
 for _, d in ipairs(slider_defs) do
     local label, key, lo, hi, step, fmt, tip = d[1], d[2], d[3], d[4], d[5], d[6], d[7]
-    pos_sub:number_float(label, menu.type.scroll)
+    local slider = pos_sub:number_float(label, menu.type.scroll)
         :fmt(fmt, lo, hi, step)
         :tooltip(tip)
         :event(menu.event.click, function(opt)
             offset[key] = opt.value
             reattach()
         end)
+    pos_sliders[#pos_sliders + 1] = slider
 end
 
 pos_sub:button('Reset Position')
@@ -399,6 +407,7 @@ pos_sub:button('Reset Position')
     :event(menu.event.click, function()
         offset.x, offset.y, offset.z = 0.0, 0.0, 0.0
         offset.yaw = 0.0
+        for _, s in ipairs(pos_sliders) do s.value = 0.0 end
         reattach()
         notify.push(SCRIPT_NAME, 'Position reset')
     end)
