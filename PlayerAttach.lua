@@ -212,23 +212,43 @@ local function build_player_entry(parent, player)
                 end
             end)
     end
+
+    return psub
 end
 
 -- ─── Self menu (menu.root) ─────────────────────────────────────────
 local root = menu.root()
 
--- Player list submenu (statically populated at load)
+-- Player list submenu (dynamically managed via join/leave events)
 local player_list_sub = root:submenu('Players')
 player_list_sub:tooltip('Browse online players and attach to their vehicle')
+
+local player_menu_entries = {}
 
 do
     local me = players.me()
     for _, p in ipairs(players.list()) do
         if p.name ~= me.name then
-            build_player_entry(player_list_sub, p)
+            player_menu_entries[p.name] = build_player_entry(player_list_sub, p)
         end
     end
 end
+
+events.subscribe(events.event.player_join, function(data)
+    local name = data.player.name
+    if not player_menu_entries[name] then
+        player_menu_entries[name] = build_player_entry(player_list_sub, data.player)
+    end
+end)
+
+events.subscribe(events.event.player_leave, function(data)
+    local name = data.player.name
+    local entry = player_menu_entries[name]
+    if entry then
+        entry:delete()
+        player_menu_entries[name] = nil
+    end
+end)
 
 -- Detach button
 root:button('Detach')
