@@ -55,6 +55,13 @@ local function get_player_vehicle(player)
     return nil
 end
 
+local function find_player_by_name(name)
+    for _, p in ipairs(players.list()) do
+        if p.name == name then return p end
+    end
+    return nil
+end
+
 local function get_target_vehicle()
     if players.is_target_session() then return nil end
     return get_player_vehicle(players.target())
@@ -182,46 +189,51 @@ end
 
 -- ─── Helper: build per-player controls ────────────────────────────
 local function build_player_entry(parent, player)
-    local psub = parent:submenu(player.name)
-    psub:tooltip('Attach options for ' .. player.name)
+    local name = player.name
+    local psub = parent:submenu(name)
+    psub:tooltip('Attach options for ' .. name)
 
     -- Attach with current offsets
     psub:button('Attach')
-        :tooltip('Attach to ' .. player.name .. '\'s vehicle using current offsets')
+        :tooltip('Attach to ' .. name .. '\'s vehicle using current offsets')
         :event(menu.event.click, function()
-            local veh = get_player_vehicle(player)
-            if not veh then notify.push(SCRIPT_NAME, player.name .. ' is not in a vehicle'); return end
+            local p = find_player_by_name(name)
+            if not p then notify.push(SCRIPT_NAME, name .. ' not found'); return end
+            local veh = get_player_vehicle(p)
+            if not veh then notify.push(SCRIPT_NAME, name .. ' is not in a vehicle'); return end
             if do_attach(veh, offset.x, offset.y, offset.z, offset.yaw) then
-                attached_player_name = player.name
-                notify.push(SCRIPT_NAME, 'Attached to ' .. player.name)
+                attached_player_name = name
+                notify.push(SCRIPT_NAME, 'Attached to ' .. name)
             end
         end)
 
     -- Detach
     psub:button('Detach')
-        :tooltip('Detach from ' .. player.name)
+        :tooltip('Detach from ' .. name)
         :event(menu.event.click, function()
             do_detach()
-            notify.push(SCRIPT_NAME, 'Detached from ' .. player.name)
+            notify.push(SCRIPT_NAME, 'Detached from ' .. name)
         end)
 
     -- Presets
     local pp = psub:submenu('Presets')
-    pp:tooltip('Quick-attach to common positions on ' .. player.name .. '\'s vehicle')
+    pp:tooltip('Quick-attach to common positions on ' .. name .. '\'s vehicle')
 
-    for _, p in ipairs(presets) do
-        pp:button(p[1])
-            :tooltip(p[2])
+    for _, preset in ipairs(presets) do
+        pp:button(preset[1])
+            :tooltip(preset[2])
             :event(menu.event.click, function()
-                local veh = get_player_vehicle(player)
-                if not veh then notify.push(SCRIPT_NAME, player.name .. ' is not in a vehicle'); return end
+                local p = find_player_by_name(name)
+                if not p then notify.push(SCRIPT_NAME, name .. ' not found'); return end
+                local veh = get_player_vehicle(p)
+                if not veh then notify.push(SCRIPT_NAME, name .. ' is not in a vehicle'); return end
 
-                offset.x, offset.y, offset.z = p[3], p[4], p[5]
-                offset.yaw = p[6]
+                offset.x, offset.y, offset.z = preset[3], preset[4], preset[5]
+                offset.yaw = preset[6]
 
-                if do_attach(veh, p[3], p[4], p[5], p[6]) then
-                    attached_player_name = player.name
-                    notify.push(SCRIPT_NAME, 'Attached to ' .. player.name .. ' (' .. p[1] .. ')')
+                if do_attach(veh, preset[3], preset[4], preset[5], preset[6]) then
+                    attached_player_name = name
+                    notify.push(SCRIPT_NAME, 'Attached to ' .. name .. ' (' .. preset[1] .. ')')
                 end
             end)
     end
