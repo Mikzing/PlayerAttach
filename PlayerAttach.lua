@@ -175,6 +175,11 @@ events.subscribe(events.event.player_leave, function(data)
     end
 end)
 
+-- ─── Helper: check if player slot is valid ──────────────────────────
+local function is_valid_player(p)
+    return p and p.name and p.name ~= '' and p.ped ~= 0
+end
+
 -- ─── Helper: build per-player controls ────────────────────────────
 local function build_player_entry(parent, player)
     local psub = parent:submenu(player.name)
@@ -190,6 +195,14 @@ local function build_player_entry(parent, player)
                 attached_player_name = player.name
                 notify.push(SCRIPT_NAME, 'Attached to ' .. player.name)
             end
+        end)
+
+    -- Detach
+    psub:button('Detach')
+        :tooltip('Detach from ' .. player.name)
+        :event(menu.event.click, function()
+            do_detach()
+            notify.push(SCRIPT_NAME, 'Detached from ' .. player.name)
         end)
 
     -- Presets
@@ -213,6 +226,30 @@ local function build_player_entry(parent, player)
             end)
     end
 
+    -- Adjust Position
+    local ap = psub:submenu('Adjust Position')
+    ap:tooltip('Fine-tune your position on ' .. player.name .. '\'s vehicle')
+
+    for _, d in ipairs(slider_defs) do
+        local label, key, lo, hi, step, fmt, tip = d[1], d[2], d[3], d[4], d[5], d[6], d[7]
+        ap:number_float(label, menu.type.scroll)
+            :fmt(fmt, lo, hi, step)
+            :tooltip(tip)
+            :event(menu.event.click, function(opt)
+                offset[key] = opt.value
+                reattach()
+            end)
+    end
+
+    ap:button('Reset Position')
+        :tooltip('Reset all offsets back to 0')
+        :event(menu.event.click, function()
+            offset.x, offset.y, offset.z = 0.0, 0.0, 0.0
+            offset.yaw = 0.0
+            reattach()
+            notify.push(SCRIPT_NAME, 'Position reset')
+        end)
+
     return psub
 end
 
@@ -228,7 +265,7 @@ local player_menu_entries = {}
 do
     local me = players.me()
     for _, p in ipairs(players.list()) do
-        if p.name ~= me.name then
+        if is_valid_player(p) and p.name ~= me.name then
             player_menu_entries[p.name] = build_player_entry(player_list_sub, p)
         end
     end
