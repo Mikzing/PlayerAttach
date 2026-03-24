@@ -217,18 +217,11 @@ end
 -- ─── Self menu (menu.root) ─────────────────────────────────────────
 local root = menu.root()
 
--- Player list submenu (with refresh button)
+-- Player list submenu (statically populated at load)
 local player_list_sub = root:submenu('Players')
 player_list_sub:tooltip('Browse online players and attach to their vehicle')
 
-local function refresh_player_list()
-    player_list_sub:clear()
-    player_list_sub:button('Refresh')
-        :tooltip('Refresh the player list')
-        :event(menu.event.click, function()
-            refresh_player_list()
-            notify.push(SCRIPT_NAME, 'Player list refreshed')
-        end)
+do
     local me = players.me()
     for _, p in ipairs(players.list()) do
         if p.name ~= me.name then
@@ -236,8 +229,6 @@ local function refresh_player_list()
         end
     end
 end
-
-refresh_player_list()
 
 -- Detach button
 root:button('Detach')
