@@ -160,17 +160,6 @@ events.subscribe(events.event.player_leave, function(data)
     end
 end)
 
--- ─── Self menu (menu.root) ─────────────────────────────────────────
-local root = menu.root()
-
-root:button('Detach')
-    :tooltip('Quick detach from any vehicle you are attached to')
-    :event(menu.event.click, function()
-        local name = attached_player_name or 'vehicle'
-        do_detach()
-        notify.push(SCRIPT_NAME, 'Detached from ' .. name)
-    end)
-
 -- ─── Player menu (menu.player_root) ────────────────────────────────
 local player_root = menu.player_root()
 
