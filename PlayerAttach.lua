@@ -95,7 +95,7 @@ local slider_defs = {
     { 'X  Left / Right', 'x',   -10.0,  10.0, 0.05, '%.2f', 'Move left (-) or right (+)' },
     { 'Y  Back / Front', 'y',   -10.0,  10.0, 0.05, '%.2f', 'Move backward (-) or forward (+)' },
     { 'Z  Down / Up',    'z',   -10.0,  10.0, 0.05, '%.2f', 'Move down (-) or up (+)' },
-    { 'Yaw',             'yaw', -180.0, 180.0, 1.0, '%.0f', 'Rotate left/right (turn)' },
+    { 'Yaw',             'yaw', -180.0, 180.0, 5.0, '%.0f', 'Rotate left/right (turn)' },
 }
 
 -- ─── Attachment state ───────────────────────────────────────────────
@@ -149,9 +149,16 @@ local function do_detach()
 end
 
 local function reattach()
-    if not attach_state.vehicle then return end
-    do_attach(attach_state.vehicle,
-        offset.x, offset.y, offset.z, offset.yaw)
+    if not attach_state.active or not attach_state.vehicle then return end
+    local entity = get_my_entity()
+    if not entity then return end
+
+    attach_state.x = offset.x
+    attach_state.y = offset.y
+    attach_state.z = offset.z
+    attach_state.yaw = offset.yaw
+
+    raw_attach(entity, attach_state.vehicle, offset.x, offset.y, offset.z, offset.yaw)
 end
 
 -- ─── Re-attach thread ──────────────────────────────────────────────
