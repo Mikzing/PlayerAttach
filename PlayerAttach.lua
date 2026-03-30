@@ -43,10 +43,9 @@ local function call_native(hash, ...)
     return invoker.call(hash, ...)
 end
 
-local function get_my_entity()
-    local me = players.me()
-    if me.in_vehicle and me.vehicle ~= 0 then return me.vehicle end
-    if me.ped ~= 0 then return me.ped end
+local function get_my_ped()
+    local ped = players.me().ped
+    if ped ~= 0 then return ped end
     return nil
 end
 
@@ -114,11 +113,24 @@ local offset = { x = DEFAULT_OFFSET.x, y = DEFAULT_OFFSET.y, z = DEFAULT_OFFSET.
 
 -- Registry of every slider group so presets/resets can sync all widgets
 local all_slider_groups = {}
+local all_fine_buttons  = {}
 
 local function sync_all_sliders()
     for _, group in ipairs(all_slider_groups) do
         for _, s in ipairs(group) do
             s.widget.value = offset[s.key]
+        end
+    end
+end
+
+local function sync_fine_mode()
+    for _, btn in ipairs(all_fine_buttons) do
+        btn.name = fine_mode and 'Fine Mode: ON' or 'Fine Mode: OFF'
+    end
+    for _, group in ipairs(all_slider_groups) do
+        for _, s in ipairs(group) do
+            local step = fine_mode and s.fine or s.norm
+            s.widget:fmt(s.fmt, s.lo, s.hi, step)
         end
     end
 end
@@ -148,7 +160,7 @@ local function raw_attach(entity, veh, x, y, z, yaw)
 end
 
 local function do_attach(veh, x, y, z, yaw)
-    local entity = get_my_entity()
+    local entity = get_my_ped()
     if not entity then notify.push(SCRIPT_NAME, 'Could not get your entity'); return false end
 
     if call_native(N_IS_ENTITY_ATTACHED, entity).bool and attach_state.vehicle ~= veh then
@@ -169,7 +181,7 @@ local function do_detach()
     attach_state.active  = false
     attach_state.vehicle = nil
 
-    local entity = get_my_entity()
+    local entity = get_my_ped()
     if entity then
         pcall(call_native, N_DETACH_ENTITY, entity, 1, 1)
     end
@@ -180,7 +192,7 @@ end
 
 local function reattach()
     if not attach_state.active or not attach_state.vehicle then return end
-    local entity = get_my_entity()
+    local entity = get_my_ped()
     if not entity then return end
 
     attach_state.x = offset.x
@@ -197,8 +209,9 @@ local function build_adjust_controls(parent)
 
     for _, d in ipairs(slider_defs) do
         local label, key, lo, hi, norm, fine, fmt, tip = d[1], d[2], d[3], d[4], d[5], d[6], d[7], d[8]
+        local init_step = fine_mode and fine or norm
         local slider = parent:number_float(label, menu.type.scroll)
-            :fmt(fmt, lo, hi, norm)
+            :fmt(fmt, lo, hi, init_step)
             :tooltip(tip)
             :event(menu.event.click, function(opt)
                 offset[key] = opt.value
@@ -208,16 +221,13 @@ local function build_adjust_controls(parent)
         sliders[#sliders + 1] = { widget = slider, key = key, norm = norm, fine = fine, fmt = fmt, lo = lo, hi = hi }
     end
 
-    parent:button('Fine Mode: OFF')
+    local fine_btn = parent:button(fine_mode and 'Fine Mode: ON' or 'Fine Mode: OFF')
         :tooltip('Toggle between normal (0.10) and fine (0.05) step size')
-        :event(menu.event.click, function(opt)
+        :event(menu.event.click, function()
             fine_mode = not fine_mode
-            opt.name = fine_mode and 'Fine Mode: ON' or 'Fine Mode: OFF'
-            for _, s in ipairs(sliders) do
-                local step = fine_mode and s.fine or s.norm
-                s.widget:fmt(s.fmt, s.lo, s.hi, step)
-            end
+            sync_fine_mode()
         end)
+    all_fine_buttons[#all_fine_buttons + 1] = fine_btn
 
     parent:button('Reset Position')
         :tooltip('Reset offsets back to roof (default)')
@@ -237,7 +247,7 @@ util.create_thread(function()
         util.yield(200)
         if not attach_state.active or not attach_state.vehicle then goto next end
 
-        local entity = get_my_entity()
+        local entity = get_my_ped()
         if not entity then goto next end
 
         if not call_native(N_IS_ENTITY_ATTACHED, entity).bool then
