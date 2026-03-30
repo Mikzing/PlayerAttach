@@ -43,6 +43,10 @@ local N_SET_ENTITY_AS_MISSION_ENTITY        = 0xAD738C3085FE7E11
 local N_NETWORK_GET_NETWORK_ID_FROM_ENTITY  = 0xA11700682F3AD45C
 local N_SET_NETWORK_ID_CAN_MIGRATE          = 0x299EEB23175895FC
 local N_SET_NETWORK_ID_EXISTS_ON_ALL_MACHINES = 0xE05E81A888FA7C76
+local N_FREEZE_ENTITY_POSITION              = 0x428CA6DBD1094446
+local N_SET_PED_CAN_RAGDOLL                 = 0xB128377056A54E2A
+local N_SET_PED_CAN_PLAY_GESTURE_ANIMS      = 0xBAF20C5432058024
+local N_CLEAR_PED_TASKS_IMMEDIATELY         = 0xAAA34F8A7CB32098
 
 -- ─── Utilities ──────────────────────────────────────────────────────
 local function call_native(hash, ...)
@@ -81,12 +85,23 @@ local function get_target_name()
     return target.name
 end
 
-local function set_idle_anims(enabled)
-    local ped = players.me().ped
-    if ped == 0 then return end
-    local v = enabled and 1 or 0
-    call_native(N_SET_PED_CAN_PLAY_AMBIENT_ANIMS, ped, v)
-    call_native(N_SET_PED_CAN_PLAY_AMBIENT_BASE_ANIMS, ped, v)
+local function lock_ped(ped)
+    if not ped or ped == 0 then return end
+    call_native(N_CLEAR_PED_TASKS_IMMEDIATELY, ped)
+    call_native(N_FREEZE_ENTITY_POSITION, ped, 1)
+    call_native(N_SET_PED_CAN_RAGDOLL, ped, 0)
+    call_native(N_SET_PED_CAN_PLAY_AMBIENT_ANIMS, ped, 0)
+    call_native(N_SET_PED_CAN_PLAY_AMBIENT_BASE_ANIMS, ped, 0)
+    call_native(N_SET_PED_CAN_PLAY_GESTURE_ANIMS, ped, 0)
+end
+
+local function unlock_ped(ped)
+    if not ped or ped == 0 then return end
+    call_native(N_FREEZE_ENTITY_POSITION, ped, 0)
+    call_native(N_SET_PED_CAN_RAGDOLL, ped, 1)
+    call_native(N_SET_PED_CAN_PLAY_AMBIENT_ANIMS, ped, 1)
+    call_native(N_SET_PED_CAN_PLAY_AMBIENT_BASE_ANIMS, ped, 1)
+    call_native(N_SET_PED_CAN_PLAY_GESTURE_ANIMS, ped, 1)
 end
 
 -- ─── Presets { name, tooltip, x, y, z, yaw } ───────────────────────
@@ -197,7 +212,7 @@ local function do_attach(veh, x, y, z, yaw)
     end
 
     raw_attach(ped, veh, x, y, z, yaw)
-    set_idle_anims(false)
+    lock_ped(ped)
 
     attach_state.active  = true
     attach_state.vehicle = veh
@@ -213,9 +228,9 @@ local function do_detach()
     local ped = get_my_ped()
     if ped then
         pcall(call_native, N_DETACH_ENTITY, ped, 1, 1)
+        unlock_ped(ped)
     end
 
-    set_idle_anims(true)
     attached_player_name = nil
 end
 
@@ -293,7 +308,7 @@ util.create_thread(function()
             raw_attach(ped, attach_state.vehicle,
                 attach_state.x, attach_state.y, attach_state.z,
                 attach_state.yaw)
-            set_idle_anims(false)
+            lock_ped(ped)
         end
 
         ::next::
