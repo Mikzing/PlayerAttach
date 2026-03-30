@@ -95,12 +95,15 @@ local presets = {
 }
 
 -- ─── Slider definitions (shared by both menus) ─────────────────────
+-- { label, key, min, max, normal_step, fine_step, fmt, tooltip }
 local slider_defs = {
-    { 'X  Left / Right', 'x',   -10.0,  10.0, 0.10, '%.2f', 'Move left (-) or right (+)' },
-    { 'Y  Back / Front', 'y',   -10.0,  10.0, 0.10, '%.2f', 'Move backward (-) or forward (+)' },
-    { 'Z  Down / Up',    'z',   -10.0,  10.0, 0.10, '%.2f', 'Move down (-) or up (+)' },
-    { 'Yaw',             'yaw', -180.0, 180.0, 5.0, '%.0f', 'Rotate left/right (turn)' },
+    { 'X  Left / Right', 'x',   -10.0,  10.0, 0.10, 0.05, '%.2f', 'Move left (-) or right (+)' },
+    { 'Y  Back / Front', 'y',   -10.0,  10.0, 0.10, 0.05, '%.2f', 'Move backward (-) or forward (+)' },
+    { 'Z  Down / Up',    'z',   -10.0,  10.0, 0.10, 0.05, '%.2f', 'Move down (-) or up (+)' },
+    { 'Yaw',             'yaw', -180.0, 180.0, 5.0,  1.0,  '%.0f', 'Rotate left/right (turn)' },
 }
+
+local fine_mode = false
 
 -- ─── Attachment state ───────────────────────────────────────────────
 local attached_player_name = nil
@@ -163,6 +166,46 @@ local function reattach()
     attach_state.yaw = offset.yaw
 
     raw_attach(entity, attach_state.vehicle, offset.x, offset.y, offset.z, offset.yaw)
+end
+
+-- ─── Helper: build adjust-position controls into a submenu ─────────
+local function build_adjust_controls(parent)
+    local sliders = {}
+
+    for _, d in ipairs(slider_defs) do
+        local label, key, lo, hi, norm, fine, fmt, tip = d[1], d[2], d[3], d[4], d[5], d[6], d[7], d[8]
+        local slider = parent:number_float(label, menu.type.scroll)
+            :fmt(fmt, lo, hi, norm)
+            :tooltip(tip)
+            :event(menu.event.click, function(opt)
+                offset[key] = opt.value
+                reattach()
+            end)
+        sliders[#sliders + 1] = { widget = slider, key = key, norm = norm, fine = fine, fmt = fmt, lo = lo, hi = hi }
+    end
+
+    parent:button('Fine Mode: OFF')
+        :tooltip('Toggle between normal (0.10) and fine (0.05) step size')
+        :event(menu.event.click, function(opt)
+            fine_mode = not fine_mode
+            opt.name = fine_mode and 'Fine Mode: ON' or 'Fine Mode: OFF'
+            for _, s in ipairs(sliders) do
+                local step = fine_mode and s.fine or s.norm
+                s.widget:fmt(s.fmt, s.lo, s.hi, step)
+            end
+        end)
+
+    parent:button('Reset Position')
+        :tooltip('Reset all offsets back to 0')
+        :event(menu.event.click, function()
+            offset.x, offset.y, offset.z = 0.0, 0.0, 0.0
+            offset.yaw = 0.0
+            for _, s in ipairs(sliders) do s.widget.value = 0.0 end
+            reattach()
+            notify.push(SCRIPT_NAME, 'Position reset')
+        end)
+
+    return sliders
 end
 
 -- ─── Re-attach thread ──────────────────────────────────────────────
@@ -251,30 +294,8 @@ local function build_player_entry(parent, player)
 
     -- Adjust Position
     local ap = psub:submenu('Adjust Position')
-    ap:tooltip('Fine-tune your position on ' .. player.name .. '\'s vehicle')
-
-    local ap_sliders = {}
-    for _, d in ipairs(slider_defs) do
-        local label, key, lo, hi, step, fmt, tip = d[1], d[2], d[3], d[4], d[5], d[6], d[7]
-        local slider = ap:number_float(label, menu.type.scroll)
-            :fmt(fmt, lo, hi, step)
-            :tooltip(tip)
-            :event(menu.event.click, function(opt)
-                offset[key] = opt.value
-                reattach()
-            end)
-        ap_sliders[#ap_sliders + 1] = slider
-    end
-
-    ap:button('Reset Position')
-        :tooltip('Reset all offsets back to 0')
-        :event(menu.event.click, function()
-            offset.x, offset.y, offset.z = 0.0, 0.0, 0.0
-            offset.yaw = 0.0
-            for _, s in ipairs(ap_sliders) do s.value = 0.0 end
-            reattach()
-            notify.push(SCRIPT_NAME, 'Position reset')
-        end)
+    ap:tooltip('Fine-tune your position on ' .. name .. '\'s vehicle')
+    build_adjust_controls(ap)
 
     return psub
 end
@@ -327,29 +348,7 @@ root:button('Detach')
 -- Adjust Position submenu (global — applies to current attachment)
 local root_pos_sub = root:submenu('Adjust Position')
 root_pos_sub:tooltip('Fine-tune your X/Y/Z position and rotation on the vehicle')
-
-local root_sliders = {}
-for _, d in ipairs(slider_defs) do
-    local label, key, lo, hi, step, fmt, tip = d[1], d[2], d[3], d[4], d[5], d[6], d[7]
-    local slider = root_pos_sub:number_float(label, menu.type.scroll)
-        :fmt(fmt, lo, hi, step)
-        :tooltip(tip)
-        :event(menu.event.click, function(opt)
-            offset[key] = opt.value
-            reattach()
-        end)
-    root_sliders[#root_sliders + 1] = slider
-end
-
-root_pos_sub:button('Reset Position')
-    :tooltip('Reset all offsets back to 0')
-    :event(menu.event.click, function()
-        offset.x, offset.y, offset.z = 0.0, 0.0, 0.0
-        offset.yaw = 0.0
-        for _, s in ipairs(root_sliders) do s.value = 0.0 end
-        reattach()
-        notify.push(SCRIPT_NAME, 'Position reset')
-    end)
+build_adjust_controls(root_pos_sub)
 
 -- ─── Player menu (menu.player_root) ────────────────────────────────
 local player_root = menu.player_root()
@@ -403,29 +402,7 @@ end
 -- Adjust Position submenu
 local pos_sub = player_root:submenu('Adjust Position')
 pos_sub:tooltip('Fine-tune your X/Y/Z position and rotation on the vehicle')
-
-local pos_sliders = {}
-for _, d in ipairs(slider_defs) do
-    local label, key, lo, hi, step, fmt, tip = d[1], d[2], d[3], d[4], d[5], d[6], d[7]
-    local slider = pos_sub:number_float(label, menu.type.scroll)
-        :fmt(fmt, lo, hi, step)
-        :tooltip(tip)
-        :event(menu.event.click, function(opt)
-            offset[key] = opt.value
-            reattach()
-        end)
-    pos_sliders[#pos_sliders + 1] = slider
-end
-
-pos_sub:button('Reset Position')
-    :tooltip('Reset all offsets back to 0')
-    :event(menu.event.click, function()
-        offset.x, offset.y, offset.z = 0.0, 0.0, 0.0
-        offset.yaw = 0.0
-        for _, s in ipairs(pos_sliders) do s.value = 0.0 end
-        reattach()
-        notify.push(SCRIPT_NAME, 'Position reset')
-    end)
+build_adjust_controls(pos_sub)
 
 -- ─── Ready ──────────────────────────────────────────────────────────
 notify.push(SCRIPT_NAME, 'v' .. SCRIPT_VERSION .. ' loaded', { icon = notify.icon.info })
