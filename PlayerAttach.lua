@@ -37,6 +37,13 @@ local N_DETACH_ENTITY                       = 0x961AC54BF0613F5D
 local N_IS_ENTITY_ATTACHED                  = 0xB346476EF1A64897
 local N_SET_PED_CAN_PLAY_AMBIENT_ANIMS      = 0x6EC47A344923E1ED
 local N_SET_PED_CAN_PLAY_AMBIENT_BASE_ANIMS = 0x0EB0585D15254740
+local N_NETWORK_REQUEST_CONTROL_OF_ENTITY   = 0xB69317BF5E782347
+local N_NETWORK_HAS_CONTROL_OF_ENTITY       = 0x01BF60A500E28887
+local N_SET_ENTITY_AS_MISSION_ENTITY        = 0xAD738C3085FE7E11
+local N_SET_ENTITY_AS_NO_LONGER_NEEDED      = 0xB736A491E64A32CF
+local N_NETWORK_GET_NETWORK_ID_FROM_ENTITY  = 0xA11700682F3AD45C
+local N_SET_NETWORK_ID_CAN_MIGRATE          = 0x299EEB23175895FC
+local N_SET_NETWORK_ID_EXISTS_ON_ALL_MACHINES = 0xE05E81A888FA7C76
 
 -- ─── Utilities ──────────────────────────────────────────────────────
 local function call_native(hash, ...)
@@ -151,23 +158,45 @@ local attach_state = {
     yaw = 0.0,
 }
 
+local function request_control(entity)
+    if call_native(N_NETWORK_HAS_CONTROL_OF_ENTITY, entity).bool then return true end
+    call_native(N_NETWORK_REQUEST_CONTROL_OF_ENTITY, entity)
+    return call_native(N_NETWORK_HAS_CONTROL_OF_ENTITY, entity).bool
+end
+
+local function make_networked(entity)
+    local net_id = call_native(N_NETWORK_GET_NETWORK_ID_FROM_ENTITY, entity).int
+    if net_id and net_id ~= 0 then
+        call_native(N_SET_NETWORK_ID_EXISTS_ON_ALL_MACHINES, net_id, 1)
+        call_native(N_SET_NETWORK_ID_CAN_MIGRATE, net_id, 1)
+    end
+end
+
 local function raw_attach(entity, veh, x, y, z, yaw)
     call_native(N_ATTACH_ENTITY_TO_ENTITY,
         entity, veh, 0,
         x + 0.0, y + 0.0, z + 0.0,
         0.0, 0.0, yaw + 0.0,
-        0, 1, 1, 0, 2, 1)
+        0, 0, 0, 1, 2, 1)
+        -- p9=false, useSoftPinning=false (won't detach on collision),
+        -- collision=false (no physics fighting), isPed=true,
+        -- rotationOrder=2, syncRot=true
 end
 
 local function do_attach(veh, x, y, z, yaw)
-    local entity = get_my_ped()
-    if not entity then notify.push(SCRIPT_NAME, 'Could not get your entity'); return false end
+    local ped = get_my_ped()
+    if not ped then notify.push(SCRIPT_NAME, 'Could not get your ped'); return false end
 
-    if call_native(N_IS_ENTITY_ATTACHED, entity).bool and attach_state.vehicle ~= veh then
-        pcall(call_native, N_DETACH_ENTITY, entity, 1, 1)
+    -- Request network control of our ped for sync
+    request_control(ped)
+    call_native(N_SET_ENTITY_AS_MISSION_ENTITY, ped, 1, 1)
+    make_networked(ped)
+
+    if call_native(N_IS_ENTITY_ATTACHED, ped).bool and attach_state.vehicle ~= veh then
+        pcall(call_native, N_DETACH_ENTITY, ped, 1, 1)
     end
 
-    raw_attach(entity, veh, x, y, z, yaw)
+    raw_attach(ped, veh, x, y, z, yaw)
     set_idle_anims(false)
 
     attach_state.active  = true
@@ -181,9 +210,10 @@ local function do_detach()
     attach_state.active  = false
     attach_state.vehicle = nil
 
-    local entity = get_my_ped()
-    if entity then
-        pcall(call_native, N_DETACH_ENTITY, entity, 1, 1)
+    local ped = get_my_ped()
+    if ped then
+        pcall(call_native, N_DETACH_ENTITY, ped, 1, 1)
+        pcall(call_native, N_SET_ENTITY_AS_NO_LONGER_NEEDED, ped)
     end
 
     set_idle_anims(true)
@@ -247,11 +277,13 @@ util.create_thread(function()
         util.yield(200)
         if not attach_state.active or not attach_state.vehicle then goto next end
 
-        local entity = get_my_ped()
-        if not entity then goto next end
+        local ped = get_my_ped()
+        if not ped then goto next end
 
-        if not call_native(N_IS_ENTITY_ATTACHED, entity).bool then
-            raw_attach(entity, attach_state.vehicle,
+        if not call_native(N_IS_ENTITY_ATTACHED, ped).bool then
+            request_control(ped)
+            make_networked(ped)
+            raw_attach(ped, attach_state.vehicle,
                 attach_state.x, attach_state.y, attach_state.z,
                 attach_state.yaw)
             set_idle_anims(false)
