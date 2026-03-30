@@ -91,12 +91,12 @@ end
 
 -- ─── Presets { name, tooltip, x, y, z, yaw } ───────────────────────
 local presets = {
-    { 'Roof',         'Stand on top of the vehicle',             0.0,   0.0,  1.2,   0.0 },
-    { 'Hood',         'Stand on the front hood',                 0.0,   2.5,  0.8,   0.0 },
-    { 'Trunk',        'Stand on the back trunk, facing rear',    0.0,  -2.5,  0.8, 180.0 },
-    { 'Left Side',    'Hang off the left side, facing outward', -1.2,   0.0,  0.5, -90.0 },
-    { 'Right Side',   'Hang off the right side, facing outward', 1.2,   0.0,  0.5,  90.0 },
-    { 'Hanging Back', 'Cling to the rear bumper',                0.0,  -2.0,  0.2, 180.0 },
+    { 'Roof',         'Stand on top of the vehicle',             0.0,   0.0,  2.0,   0.0 },
+    { 'Hood',         'Stand on the front hood',                 0.0,   2.5,  1.0,   0.0 },
+    { 'Trunk',        'Stand on the back trunk, facing rear',    0.0,  -2.5,  1.0, 180.0 },
+    { 'Left Side',    'Hang off the left side, facing outward', -1.2,   0.0,  0.8, -90.0 },
+    { 'Right Side',   'Hang off the right side, facing outward', 1.2,   0.0,  0.8,  90.0 },
+    { 'Hanging Back', 'Cling to the rear bumper',                0.0,  -2.5,  0.5, 180.0 },
 }
 
 -- ─── Slider definitions (shared by both menus) ─────────────────────
@@ -111,7 +111,7 @@ local slider_defs = {
 local fine_mode = false
 
 -- ─── Default position (Roof) — safe spawn point above the vehicle ──
-local DEFAULT_OFFSET = { x = 0.0, y = 0.0, z = 1.2, yaw = 0.0 }
+local DEFAULT_OFFSET = { x = 0.0, y = 0.0, z = 2.0, yaw = 0.0 }
 
 -- ─── Attachment state ───────────────────────────────────────────────
 local attached_player_name = nil
