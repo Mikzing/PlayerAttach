@@ -137,6 +137,7 @@ local function sync_fine_mode()
         for _, s in ipairs(group) do
             local step = fine_mode and s.fine or s.norm
             s.widget:fmt(s.fmt, s.lo, s.hi, step)
+            s.widget.value = offset[s.key]
         end
     end
 end
