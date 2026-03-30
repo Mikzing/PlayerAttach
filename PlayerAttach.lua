@@ -105,9 +105,32 @@ local slider_defs = {
 
 local fine_mode = false
 
+-- ─── Default position (Roof) — safe spawn point above the vehicle ──
+local DEFAULT_OFFSET = { x = 0.0, y = 0.0, z = 1.2, yaw = 0.0 }
+
 -- ─── Attachment state ───────────────────────────────────────────────
 local attached_player_name = nil
-local offset = { x = 0.0, y = 0.0, z = 0.0, yaw = 0.0 }
+local offset = { x = DEFAULT_OFFSET.x, y = DEFAULT_OFFSET.y, z = DEFAULT_OFFSET.z, yaw = DEFAULT_OFFSET.yaw }
+
+-- Registry of every slider group so presets/resets can sync all widgets
+local all_slider_groups = {}
+
+local function sync_all_sliders()
+    for _, group in ipairs(all_slider_groups) do
+        for _, s in ipairs(group) do
+            s.widget.value = offset[s.key]
+        end
+    end
+end
+
+local function set_offset(x, y, z, yaw)
+    offset.x, offset.y, offset.z, offset.yaw = x, y, z, yaw
+    sync_all_sliders()
+end
+
+local function reset_offset()
+    set_offset(DEFAULT_OFFSET.x, DEFAULT_OFFSET.y, DEFAULT_OFFSET.z, DEFAULT_OFFSET.yaw)
+end
 
 local attach_state = {
     active  = false,
@@ -181,6 +204,7 @@ local function build_adjust_controls(parent)
                 offset[key] = opt.value
                 reattach()
             end)
+        slider.value = offset[key]
         sliders[#sliders + 1] = { widget = slider, key = key, norm = norm, fine = fine, fmt = fmt, lo = lo, hi = hi }
     end
 
@@ -196,15 +220,14 @@ local function build_adjust_controls(parent)
         end)
 
     parent:button('Reset Position')
-        :tooltip('Reset all offsets back to 0')
+        :tooltip('Reset offsets back to roof (default)')
         :event(menu.event.click, function()
-            offset.x, offset.y, offset.z = 0.0, 0.0, 0.0
-            offset.yaw = 0.0
-            for _, s in ipairs(sliders) do s.widget.value = 0.0 end
+            reset_offset()
             reattach()
             notify.push(SCRIPT_NAME, 'Position reset')
         end)
 
+    all_slider_groups[#all_slider_groups + 1] = sliders
     return sliders
 end
 
@@ -247,7 +270,7 @@ local function build_player_entry(parent, player)
     local psub = parent:submenu(name)
     psub:tooltip('Attach options for ' .. name)
 
-    -- Attach with current offsets
+    -- Attach with current offsets (reset to Roof if new target)
     psub:button('Attach')
         :tooltip('Attach to ' .. name .. '\'s vehicle using current offsets')
         :event(menu.event.click, function()
@@ -255,6 +278,7 @@ local function build_player_entry(parent, player)
             if not p then notify.push(SCRIPT_NAME, name .. ' not found'); return end
             local veh = get_player_vehicle(p)
             if not veh then notify.push(SCRIPT_NAME, name .. ' is not in a vehicle'); return end
+            if attached_player_name ~= name then reset_offset() end
             if do_attach(veh, offset.x, offset.y, offset.z, offset.yaw) then
                 attached_player_name = name
                 notify.push(SCRIPT_NAME, 'Attached to ' .. name)
@@ -282,10 +306,9 @@ local function build_player_entry(parent, player)
                 local veh = get_player_vehicle(p)
                 if not veh then notify.push(SCRIPT_NAME, name .. ' is not in a vehicle'); return end
 
-                offset.x, offset.y, offset.z = preset[3], preset[4], preset[5]
-                offset.yaw = preset[6]
+                set_offset(preset[3], preset[4], preset[5], preset[6])
 
-                if do_attach(veh, preset[3], preset[4], preset[5], preset[6]) then
+                if do_attach(veh, offset.x, offset.y, offset.z, offset.yaw) then
                     attached_player_name = name
                     notify.push(SCRIPT_NAME, 'Attached to ' .. name .. ' (' .. preset[1] .. ')')
                 end
@@ -361,6 +384,7 @@ player_root:button('Attach')
         if name == players.me().name then notify.push(SCRIPT_NAME, 'Cannot attach to yourself'); return end
         local veh = get_target_vehicle()
         if not veh then notify.push(SCRIPT_NAME, name .. ' is not in a vehicle'); return end
+        if attached_player_name ~= name then reset_offset() end
         if do_attach(veh, offset.x, offset.y, offset.z, offset.yaw) then
             attached_player_name = name
             notify.push(SCRIPT_NAME, 'Attached to ' .. name)
@@ -389,10 +413,9 @@ for _, p in ipairs(presets) do
             local veh = get_target_vehicle()
             if not veh then notify.push(SCRIPT_NAME, name .. ' is not in a vehicle'); return end
 
-            offset.x, offset.y, offset.z = p[3], p[4], p[5]
-            offset.yaw = p[6]
+            set_offset(p[3], p[4], p[5], p[6])
 
-            if do_attach(veh, p[3], p[4], p[5], p[6]) then
+            if do_attach(veh, offset.x, offset.y, offset.z, offset.yaw) then
                 attached_player_name = name
                 notify.push(SCRIPT_NAME, 'Attached to ' .. name .. ' (' .. p[1] .. ')')
             end
