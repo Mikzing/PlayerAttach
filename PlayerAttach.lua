@@ -40,7 +40,6 @@ local N_SET_PED_CAN_PLAY_AMBIENT_BASE_ANIMS = 0x0EB0585D15254740
 local N_NETWORK_REQUEST_CONTROL_OF_ENTITY   = 0xB69317BF5E782347
 local N_NETWORK_HAS_CONTROL_OF_ENTITY       = 0x01BF60A500E28887
 local N_SET_ENTITY_AS_MISSION_ENTITY        = 0xAD738C3085FE7E11
-local N_SET_ENTITY_AS_NO_LONGER_NEEDED      = 0xB736A491E64A32CF
 local N_NETWORK_GET_NETWORK_ID_FROM_ENTITY  = 0xA11700682F3AD45C
 local N_SET_NETWORK_ID_CAN_MIGRATE          = 0x299EEB23175895FC
 local N_SET_NETWORK_ID_EXISTS_ON_ALL_MACHINES = 0xE05E81A888FA7C76
@@ -123,7 +122,7 @@ local all_slider_groups = {}
 local all_fine_buttons  = {}
 
 local function sync_all_sliders()
-    for _, group in ipairs(all_slider_groups) do
+    for _, group in pairs(all_slider_groups) do
         for _, s in ipairs(group) do
             s.widget.value = offset[s.key]
         end
@@ -131,10 +130,10 @@ local function sync_all_sliders()
 end
 
 local function sync_fine_mode()
-    for _, btn in ipairs(all_fine_buttons) do
+    for _, btn in pairs(all_fine_buttons) do
         btn.name = fine_mode and 'Fine Mode: ON' or 'Fine Mode: OFF'
     end
-    for _, group in ipairs(all_slider_groups) do
+    for _, group in pairs(all_slider_groups) do
         for _, s in ipairs(group) do
             local step = fine_mode and s.fine or s.norm
             s.widget:fmt(s.fmt, s.lo, s.hi, step)
@@ -168,7 +167,7 @@ local function make_networked(entity)
     local net_id = call_native(N_NETWORK_GET_NETWORK_ID_FROM_ENTITY, entity).int
     if net_id and net_id ~= 0 then
         call_native(N_SET_NETWORK_ID_EXISTS_ON_ALL_MACHINES, net_id, 1)
-        call_native(N_SET_NETWORK_ID_CAN_MIGRATE, net_id, 1)
+        call_native(N_SET_NETWORK_ID_CAN_MIGRATE, net_id, 0)
     end
 end
 
@@ -213,7 +212,6 @@ local function do_detach()
     local ped = get_my_ped()
     if ped then
         pcall(call_native, N_DETACH_ENTITY, ped, 1, 1)
-        pcall(call_native, N_SET_ENTITY_AS_NO_LONGER_NEEDED, ped)
     end
 
     set_idle_anims(true)
@@ -267,8 +265,16 @@ local function build_adjust_controls(parent)
             notify.push(SCRIPT_NAME, 'Position reset')
         end)
 
-    all_slider_groups[#all_slider_groups + 1] = sliders
-    return sliders
+    local group_idx = #all_slider_groups + 1
+    all_slider_groups[group_idx] = sliders
+
+    local btn_idx = #all_fine_buttons
+    -- btn was already appended above
+
+    return function()
+        all_slider_groups[group_idx] = nil
+        all_fine_buttons[btn_idx] = nil
+    end
 end
 
 -- ─── Re-attach thread ──────────────────────────────────────────────
@@ -360,9 +366,9 @@ local function build_player_entry(parent, player)
     -- Adjust Position
     local ap = psub:submenu('Adjust Position')
     ap:tooltip('Fine-tune your position on ' .. name .. '\'s vehicle')
-    build_adjust_controls(ap)
+    local cleanup = build_adjust_controls(ap)
 
-    return psub
+    return psub, cleanup
 end
 
 -- ─── Self menu (menu.root) ─────────────────────────────────────────
@@ -373,12 +379,13 @@ local player_list_sub = root:submenu('Players')
 player_list_sub:tooltip('Browse online players and attach to their vehicle')
 
 local player_menu_entries = {}
+local player_cleanup_fns  = {}
 
 do
     local me = players.me()
     for _, p in ipairs(players.list()) do
         if is_valid_player(p) and p.name ~= me.name then
-            player_menu_entries[p.name] = build_player_entry(player_list_sub, p)
+            player_menu_entries[p.name], player_cleanup_fns[p.name] = build_player_entry(player_list_sub, p)
         end
     end
 end
@@ -388,12 +395,16 @@ events.subscribe(events.event.player_join, function(data)
     local name = data.player.name
     if name == players.me().name then return end
     if not player_menu_entries[name] then
-        player_menu_entries[name] = build_player_entry(player_list_sub, data.player)
+        player_menu_entries[name], player_cleanup_fns[name] = build_player_entry(player_list_sub, data.player)
     end
 end)
 
 events.subscribe(events.event.player_leave, function(data)
     local name = data.player.name
+    local cleanup = player_cleanup_fns[name]
+    if cleanup then cleanup() end
+    player_cleanup_fns[name] = nil
+
     local entry = player_menu_entries[name]
     if entry then
         entry:delete()
