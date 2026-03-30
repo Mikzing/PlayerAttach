@@ -64,12 +64,16 @@ end
 
 local function get_target_vehicle()
     if players.is_target_session() then return nil end
-    return get_player_vehicle(players.target())
+    local target = players.target()
+    if not target then return nil end
+    return get_player_vehicle(target)
 end
 
 local function get_target_name()
     if players.is_target_session() then return 'session' end
-    return players.target().name
+    local target = players.target()
+    if not target then return 'unknown' end
+    return target.name
 end
 
 local function set_idle_anims(enabled)
@@ -92,9 +96,9 @@ local presets = {
 
 -- ─── Slider definitions (shared by both menus) ─────────────────────
 local slider_defs = {
-    { 'X  Left / Right', 'x',   -10.0,  10.0, 0.05, '%.2f', 'Move left (-) or right (+)' },
-    { 'Y  Back / Front', 'y',   -10.0,  10.0, 0.05, '%.2f', 'Move backward (-) or forward (+)' },
-    { 'Z  Down / Up',    'z',   -10.0,  10.0, 0.05, '%.2f', 'Move down (-) or up (+)' },
+    { 'X  Left / Right', 'x',   -10.0,  10.0, 0.10, '%.2f', 'Move left (-) or right (+)' },
+    { 'Y  Back / Front', 'y',   -10.0,  10.0, 0.10, '%.2f', 'Move backward (-) or forward (+)' },
+    { 'Z  Down / Up',    'z',   -10.0,  10.0, 0.10, '%.2f', 'Move down (-) or up (+)' },
     { 'Yaw',             'yaw', -180.0, 180.0, 5.0, '%.0f', 'Rotate left/right (turn)' },
 }
 
@@ -121,8 +125,8 @@ local function do_attach(veh, x, y, z, yaw)
     local entity = get_my_entity()
     if not entity then notify.push(SCRIPT_NAME, 'Could not get your entity'); return false end
 
-    if call_native(N_IS_ENTITY_ATTACHED, entity).bool then
-        call_native(N_DETACH_ENTITY, entity, 1, 1)
+    if call_native(N_IS_ENTITY_ATTACHED, entity).bool and attach_state.vehicle ~= veh then
+        pcall(call_native, N_DETACH_ENTITY, entity, 1, 1)
     end
 
     raw_attach(entity, veh, x, y, z, yaw)
@@ -294,7 +298,9 @@ do
 end
 
 events.subscribe(events.event.player_join, function(data)
+    if not is_valid_player(data.player) then return end
     local name = data.player.name
+    if name == players.me().name then return end
     if not player_menu_entries[name] then
         player_menu_entries[name] = build_player_entry(player_list_sub, data.player)
     end
@@ -352,8 +358,9 @@ local player_root = menu.player_root()
 player_root:button('Attach')
     :tooltip('Attach to this player\'s vehicle using current offsets')
     :event(menu.event.click, function()
-        local veh = get_target_vehicle()
         local name = get_target_name()
+        if name == players.me().name then notify.push(SCRIPT_NAME, 'Cannot attach to yourself'); return end
+        local veh = get_target_vehicle()
         if not veh then notify.push(SCRIPT_NAME, name .. ' is not in a vehicle'); return end
         if do_attach(veh, offset.x, offset.y, offset.z, offset.yaw) then
             attached_player_name = name
@@ -378,8 +385,9 @@ for _, p in ipairs(presets) do
     presets_sub:button(p[1])
         :tooltip(p[2])
         :event(menu.event.click, function()
-            local veh = get_target_vehicle()
             local name = get_target_name()
+            if name == players.me().name then notify.push(SCRIPT_NAME, 'Cannot attach to yourself'); return end
+            local veh = get_target_vehicle()
             if not veh then notify.push(SCRIPT_NAME, name .. ' is not in a vehicle'); return end
 
             offset.x, offset.y, offset.z = p[3], p[4], p[5]
